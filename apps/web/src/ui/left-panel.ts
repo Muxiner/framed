@@ -1,0 +1,691 @@
+// 左侧控制栏：照片 / 边框 / 内容块 / 水印 / Logo。
+import {
+  FONT_LABELS,
+  TEMPLATE_LABELS,
+  type Block,
+  type FontFamily,
+  type FrameTemplate,
+} from '../types';
+import { h, percent, setText, setValue, toggleClass } from './dom';
+import type { Editor, EditorState } from './editor';
+import {
+  colorField,
+  iconButton,
+  section,
+  segmentedField,
+  sliderField,
+  textButton,
+  textareaField,
+  toggleField,
+  type ColorHandle,
+  type SectionHandle,
+  type SegmentedHandle,
+  type SliderHandle,
+  type TextAreaHandle,
+  type ToggleHandle,
+} from './fields';
+import { icon } from './icons';
+import { SAMPLES, sampleThumb, sampleUrl, type SampleId } from './samples';
+
+const TEMPLATE_ORDER: FrameTemplate[] = ['none', 'white', 'polaroid', 'film', 'black'];
+
+const BLOCK_ICONS: Record<string, string> = {
+  camera: 'camera',
+  gear: 'aperture',
+  date: 'calendar',
+  watermark: 'text',
+  logo: 'logo',
+};
+
+interface BlockRow {
+  root: HTMLElement;
+  main: HTMLButtonElement;
+  eye: HTMLButtonElement;
+  iconWrap: HTMLElement;
+  name: HTMLElement;
+  preview: HTMLElement;
+  edit: HTMLElement;
+  textarea: HTMLTextAreaElement | null;
+  logoImg: HTMLImageElement | null;
+}
+
+function exposureLine(state: EditorState): string {
+  const exif = state.photo?.exif;
+  if (!exif) return '—';
+  const parts = [exif.focal, exif.aperture, exif.shutter, exif.iso].filter((item) => item.length > 0);
+  return parts.length ? parts.join(' · ') : '—';
+}
+
+function fileExt(name: string): string {
+  const match = /\.([a-zA-Z0-9]+)$/.exec(name);
+  return match?.[1]?.toUpperCase() ?? 'IMAGE';
+}
+
+export class LeftPanel {
+  readonly root: HTMLElement;
+
+  private readonly editor: Editor;
+  private readonly photoInput: HTMLInputElement;
+  private readonly logoInput: HTMLInputElement;
+
+  private photoThumb!: HTMLImageElement;
+  private photoBadge!: HTMLElement;
+  private photoName!: HTMLElement;
+  private photoSub!: HTMLElement;
+  private photoEmpty!: HTMLElement;
+  private exifValues = new Map<string, HTMLElement>();
+
+  private templateCards = new Map<FrameTemplate, HTMLButtonElement>();
+  private frameSection!: SectionHandle;
+  private marginField!: SliderHandle;
+  private bottomField!: SliderHandle;
+  private backgroundField!: ColorHandle;
+  private radiusField!: SliderHandle;
+  private holesField!: ToggleHandle;
+  private holesRow!: HTMLElement;
+
+  private blocksSection!: SectionHandle;
+  private blockList!: HTMLElement;
+  private blockRows = new Map<string, BlockRow>();
+  private blockKey = '';
+  private addLogoRow!: HTMLElement;
+
+  private wmText!: TextAreaHandle;
+  private wmFont!: SegmentedHandle<FontFamily>;
+  private wmSize!: SliderHandle;
+  private wmColor!: ColorHandle;
+  private wmEmpty!: HTMLElement;
+
+  private logoSection!: SectionHandle;
+  private logoEmpty!: HTMLElement;
+  private logoFilled!: HTMLElement;
+  private logoPreviewImg!: HTMLImageElement;
+  private logoWidth!: SliderHandle;
+  private lastLogoSrc = '';
+  private lastThumb: string | null = null;
+
+  constructor(editor: Editor) {
+    this.editor = editor;
+    this.photoInput = this.makeFileInput('image/*', (file) => void editor.loadPhoto(file));
+    this.logoInput = this.makeFileInput('image/png,image/jpeg,image/webp', (file) => void editor.uploadLogo(file));
+
+    const head = h('div', { class: 'panel-head' }, [
+      h('span', { class: 'panel-title mono', text: '控制' }),
+      h('div', { class: 'panel-head-actions' }, [
+        iconButton({
+          name: 'close',
+          label: '关闭控制栏',
+          className: 'drawer-close',
+          onClick: () => editor.closeDrawers(),
+        }),
+      ]),
+    ]);
+
+    const photo = this.buildPhotoSection();
+    const frame = this.buildFrameSection();
+    const blocks = this.buildBlocksSection();
+    const watermark = this.buildWatermarkSection();
+    const logo = this.buildLogoSection();
+
+    this.root = h('aside', { class: 'panel panel-left', ariaLabel: '控制栏' }, [
+      head,
+      this.photoInput,
+      this.logoInput,
+      h('div', { class: 'panel-scroll' }, [
+        photo,
+        frame.root,
+        blocks,
+        watermark.root,
+        logo.root,
+        h('p', { class: 'panel-foot mono', text: '框影 FRAMED · BUILD 0.1.0' }),
+      ]),
+    ]);
+
+    editor.subscribe((state) => this.update(state));
+    this.update(editor.state);
+  }
+
+  private makeFileInput(accept: string, onPick: (file: File) => void): HTMLInputElement {
+    const input = h('input', {
+      class: 'visually-hidden',
+      attrs: { type: 'file', accept, tabindex: '-1' },
+    });
+    input.addEventListener('change', () => {
+      const file = input.files?.[0];
+      if (file) onPick(file);
+      input.value = '';
+    });
+    return input;
+  }
+
+  // ------------------------------------------------------------------ 照片
+
+  private buildPhotoSection(): HTMLElement {
+    this.photoThumb = h('img', { class: 'photo-thumb', attrs: { alt: '当前照片' } });
+    this.photoBadge = h('span', { class: 'photo-badge mono', text: '—' });
+    this.photoEmpty = h('span', { class: 'photo-empty', html: `${icon('image', 22)}<span>尚未载入照片</span>` });
+    const thumbWrap = h('div', { class: 'photo-thumb-wrap' }, [this.photoThumb, this.photoBadge, this.photoEmpty]);
+
+    this.photoName = h('span', { class: 'photo-name', text: '尚未载入照片' });
+    this.photoSub = h('span', { class: 'photo-sub mono', text: '拖入照片或选择示例' });
+
+    const exifGrid = h('div', { class: 'exif-grid' });
+    const rows: [string, string][] = [
+      ['camera', '机型'],
+      ['lens', '镜头'],
+      ['exposure', '曝光'],
+      ['date', '时间'],
+    ];
+    for (const [key, label] of rows) {
+      const value = h('span', { class: 'exif-value mono', text: '—' });
+      this.exifValues.set(key, value);
+      exifGrid.append(
+        h('div', { class: 'exif-item' }, [
+          h('span', { class: 'exif-label', text: label }),
+          value,
+        ]),
+      );
+    }
+
+    const replace = textButton('更换照片', {
+      icon: 'image',
+      className: 'btn-block',
+      onClick: () => this.photoInput.click(),
+    });
+
+    const sampleStrip = h('div', { class: 'sample-strip', role: 'group', ariaLabel: '示例照片' });
+    for (const sample of SAMPLES) {
+      sampleStrip.append(this.buildSampleChip(sample.id, sample.label));
+    }
+
+    const body = h('div', {}, [
+      h('div', { class: 'photo-card' }, [
+        thumbWrap,
+        h('div', { class: 'photo-info' }, [this.photoName, this.photoSub]),
+      ]),
+      exifGrid,
+      replace,
+      h('span', { class: 'sample-strip-label mono', text: '示例照片' }),
+      sampleStrip,
+    ]);
+
+    return section({ index: '01', title: '照片', open: true, body }).root;
+  }
+
+  private buildSampleChip(id: SampleId, label: string): HTMLElement {
+    const img = h('img', { attrs: { alt: '', loading: 'lazy' } });
+    img.src = sampleUrl(id);
+    this.attachSampleFallback(img, id);
+    const button = h(
+      'button',
+      {
+        class: 'sample-mini',
+        title: `载入示例：${label}`,
+        attrs: { type: 'button' },
+      },
+      [img, h('span', { class: 'sample-mini-label mono', text: label })],
+    );
+    button.addEventListener('click', () => void this.editor.loadSample(id));
+    return button;
+  }
+
+  private attachSampleFallback(image: HTMLImageElement, id: SampleId): void {
+    let fallback = false;
+    image.addEventListener('error', () => {
+      if (fallback) return;
+      fallback = true;
+      void sampleThumb(id).then((url) => {
+        image.src = url;
+      });
+    });
+  }
+
+  // ------------------------------------------------------------------ 边框
+
+  private buildFrameSection(): SectionHandle {
+    const cards = h('div', { class: 'template-grid', role: 'group', ariaLabel: '边框模板' });
+    for (const template of TEMPLATE_ORDER) {
+      const card = h(
+        'button',
+        {
+          class: `tpl-card tpl-${template}`,
+          attrs: { type: 'button', 'aria-label': `${TEMPLATE_LABELS[template]}边框` },
+          ariaPressed: false,
+        },
+        [
+          h('span', { class: 'tpl-mini' }, [h('span', { class: 'tpl-mini-photo' })]),
+          h('span', { class: 'tpl-name', text: TEMPLATE_LABELS[template] }),
+        ],
+      );
+      card.addEventListener('click', () => void this.editor.setTemplate(template));
+      this.templateCards.set(template, card);
+      cards.append(card);
+    }
+
+    this.marginField = sliderField({
+      label: '边距',
+      min: 0.02,
+      max: 0.12,
+      step: 0.001,
+      value: 0.045,
+      format: (value) => percent(value, 1),
+      ariaLabel: '边框边距',
+      onInput: (value) => this.editor.setFrame({ margin: value }),
+    });
+    this.bottomField = sliderField({
+      label: '底栏倍率',
+      min: 1,
+      max: 6,
+      step: 0.1,
+      value: 3,
+      format: (value) => `${value.toFixed(1)}×`,
+      ariaLabel: '底栏倍率',
+      onInput: (value) => this.editor.setFrame({ bottomRatio: value }),
+    });
+    this.backgroundField = colorField({
+      label: '边框底色',
+      value: '#f6f3ee',
+      onChange: (value) => this.editor.setFrame({ background: value }),
+    });
+    this.radiusField = sliderField({
+      label: '照片圆角',
+      min: 0,
+      max: 0.06,
+      step: 0.001,
+      value: 0,
+      format: (value) => percent(value, 1),
+      ariaLabel: '照片圆角',
+      onInput: (value) => this.editor.setFrame({ radius: value }),
+    });
+    this.holesField = toggleField({
+      label: '胶片齿孔',
+      checked: true,
+      hint: '在边框上绘制胶片齿孔',
+      onChange: (checked) => this.editor.setFrame({ filmHoles: checked }),
+    });
+    this.holesRow = this.holesField.root;
+    this.holesRow.hidden = true;
+
+    this.frameSection = section({
+      index: '02',
+      title: '边框',
+      badge: TEMPLATE_LABELS.white,
+      open: true,
+      body: h('div', {}, [
+        cards,
+        this.marginField.root,
+        this.bottomField.root,
+        this.backgroundField.root,
+        this.radiusField.root,
+        this.holesRow,
+      ]),
+    });
+    return this.frameSection;
+  }
+
+  // ------------------------------------------------------------------ 内容块
+
+  private buildBlocksSection(): HTMLElement {
+    this.blockList = h('div', { class: 'block-list', role: 'group', ariaLabel: '内容块列表' });
+    this.addLogoRow = h('div', { class: 'block-add', hidden: true }, [
+      textButton('添加 Logo', {
+        icon: 'plus',
+        className: 'btn-block btn-ghost',
+        onClick: () => this.logoInput.click(),
+      }),
+    ]);
+
+    this.blocksSection = section({
+      index: '03',
+      title: '内容块',
+      open: true,
+      body: h('div', {}, [
+        this.blockList,
+        this.addLogoRow,
+        h('p', {
+          class: 'sec-note',
+          text: '点击选中，画布上可拖拽移动；眼睛图标控制显隐。',
+        }),
+      ]),
+    });
+    return this.blocksSection.root;
+  }
+
+  private buildBlockRow(block: Block): BlockRow {
+    const iconWrap = h('span', { class: 'block-ico', html: icon(BLOCK_ICONS[block.id] ?? 'text', 14) });
+    const name = h('span', { class: 'block-name', text: block.name });
+    const preview = h('span', { class: 'block-preview mono', text: '' });
+    const main = h('button', { class: 'block-main', attrs: { type: 'button' } }, [
+      iconWrap,
+      h('span', { class: 'block-texts' }, [name, preview]),
+    ]);
+    main.addEventListener('click', () => {
+      this.editor.select(block.id);
+      this.editor.openInspectorForSelection();
+    });
+
+    const eye = iconButton({
+      name: 'eye',
+      label: `隐藏 ${block.name}`,
+      className: 'block-eye',
+    });
+    eye.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.editor.toggleVisibility(block.id);
+    });
+
+    const row = h('div', { class: 'block-row' }, [main, eye]);
+    const edit = h('div', { class: 'block-edit', hidden: true });
+    let textarea: HTMLTextAreaElement | null = null;
+    let logoImg: HTMLImageElement | null = null;
+
+    if (block.type === 'text') {
+      textarea = h('textarea', {
+        class: 'input textarea block-textarea',
+        attrs: {
+          rows: 2,
+          spellcheck: 'false',
+          'aria-label': `${block.name}文本`,
+          placeholder: '输入文本，支持换行',
+        },
+      });
+      textarea.value = block.text;
+      textarea.addEventListener('input', () => {
+        this.editor.updateTextBlock(block.id, { text: textarea?.value ?? '' });
+      });
+      edit.append(
+        textarea,
+        h('p', { class: 'block-edit-hint mono', text: '内容即时生效 · 完整排版在右侧检查器' }),
+      );
+    } else {
+      logoImg = h('img', { class: 'block-logo-img', attrs: { alt: '当前 Logo' } });
+      if (block.src) logoImg.src = block.src;
+      const replace = textButton('更换', {
+        icon: 'upload',
+        className: 'btn-small',
+        onClick: () => this.logoInput.click(),
+      });
+      const remove = textButton('删除', {
+        icon: 'trash',
+        className: 'btn-small btn-danger-ghost',
+        onClick: () => this.editor.removeLogo(),
+      });
+      edit.append(
+        h('div', { class: 'block-logo-row' }, [logoImg]),
+        h('div', { class: 'row-actions' }, [replace, remove]),
+      );
+    }
+
+    const root = h('div', { class: 'block-item', data: { id: block.id } }, [row, edit]);
+    const handle: BlockRow = { root, main, eye, iconWrap, name, preview, edit, textarea, logoImg };
+    this.blockRows.set(block.id, handle);
+    this.blockList.append(root);
+    return handle;
+  }
+
+  private syncBlocks(state: EditorState): void {
+    const blocks = state.config?.blocks ?? [];
+    const key = blocks.map((block) => block.id).join('|');
+    if (key !== this.blockKey) {
+      this.blockKey = key;
+      this.blockRows.clear();
+      this.blockList.replaceChildren();
+      for (const block of blocks) this.buildBlockRow(block);
+    }
+    const hasLogo = blocks.some((block) => block.type === 'logo');
+    this.addLogoRow.hidden = hasLogo || !state.config;
+    this.blocksSection.setBadge(blocks.length ? String(blocks.length) : null);
+
+    for (const block of blocks) {
+      const row = this.blockRows.get(block.id);
+      if (!row) continue;
+      const selected = state.selectedId === block.id;
+      toggleClass(row.root, 'is-selected', selected);
+      toggleClass(row.root, 'is-hidden', !block.visible);
+      row.main.setAttribute('aria-pressed', String(selected));
+      setText(row.name, block.name);
+      if (block.type === 'text') {
+        const flat = block.text.replace(/\n+/g, ' · ');
+        setText(row.preview, flat || '（空）');
+        if (row.textarea) setValue(row.textarea, block.text);
+      } else {
+        setText(row.preview, `PNG · ${percent(block.width, 1)}`);
+        if (row.logoImg && row.logoImg.src !== block.src) row.logoImg.src = block.src;
+      }
+      row.eye.innerHTML = icon(block.visible ? 'eye' : 'eyeOff', 14);
+      row.eye.setAttribute('aria-label', `${block.visible ? '隐藏' : '显示'} ${block.name}`);
+      row.eye.setAttribute('aria-pressed', String(block.visible));
+      const showEdit = selected && state.config !== null;
+      if (row.edit.hidden === showEdit) row.edit.hidden = !showEdit;
+    }
+  }
+
+  // ------------------------------------------------------------------ 水印
+
+  private watermarkBlock(state: EditorState): Block | null {
+    return state.config?.blocks.find((block) => block.id === 'watermark') ?? null;
+  }
+
+  private buildWatermarkSection(): SectionHandle {
+    this.wmText = textareaField({
+      label: '水印文字',
+      value: '© muxiner',
+      rows: 2,
+      hint: '支持多行；输入即时反映到画布',
+      onInput: (value) => {
+        const block = this.watermarkBlock(this.editor.state);
+        if (block) this.editor.updateTextBlock(block.id, { text: value });
+      },
+    });
+    this.wmFont = segmentedField<FontFamily>({
+      label: '字体',
+      options: [
+        { value: 'sans', label: FONT_LABELS.sans },
+        { value: 'mono', label: FONT_LABELS.mono },
+        { value: 'cjk', label: FONT_LABELS.cjk },
+      ],
+      value: 'sans',
+      onChange: (value) => {
+        const block = this.watermarkBlock(this.editor.state);
+        if (block) this.editor.updateTextBlock(block.id, { font: value });
+      },
+    });
+    this.wmSize = sliderField({
+      label: '字号',
+      min: 0.5,
+      max: 4,
+      step: 0.02,
+      value: 1,
+      format: (value) => `${value.toFixed(2)}×`,
+      ariaLabel: '水印字号',
+      onInput: (value) => {
+        const block = this.watermarkBlock(this.editor.state);
+        if (block) this.editor.updateTextBlock(block.id, { size: value });
+      },
+    });
+    this.wmColor = colorField({
+      label: '颜色',
+      value: '#1a1a18',
+      onChange: (value) => {
+        const block = this.watermarkBlock(this.editor.state);
+        if (block) this.editor.updateTextBlock(block.id, { color: value });
+      },
+    });
+    this.wmEmpty = h('p', { class: 'sec-note', text: '当前模板没有水印块。', hidden: true });
+
+    return section({
+      index: '04',
+      title: '水印',
+      open: true,
+      body: h('div', {}, [
+        this.wmEmpty,
+        this.wmText.root,
+        this.wmFont.root,
+        this.wmSize.root,
+        this.wmColor.root,
+      ]),
+    });
+  }
+
+  // ------------------------------------------------------------------ Logo
+
+  private logoBlock(state: EditorState): Block | null {
+    return state.config?.blocks.find((block) => block.type === 'logo') ?? null;
+  }
+
+  private buildLogoSection(): SectionHandle {
+    this.logoEmpty = h(
+      'button',
+      {
+        class: 'logo-drop',
+        attrs: { type: 'button' },
+        ariaLabel: '上传 Logo 图片',
+      },
+      [
+        h('span', { class: 'logo-drop-ico', html: icon('upload', 18) }),
+        h('strong', { text: '上传 PNG Logo' }),
+        h('span', { class: 'logo-drop-hint', text: '透明背景效果最佳 · 自动缩至 800px' }),
+      ],
+    );
+    this.logoEmpty.addEventListener('click', () => this.logoInput.click());
+
+    this.logoPreviewImg = h('img', { class: 'logo-preview-img', attrs: { alt: 'Logo 预览' } });
+    const replace = textButton('更换', {
+      icon: 'upload',
+      className: 'btn-small',
+      onClick: () => this.logoInput.click(),
+    });
+    const remove = textButton('删除', {
+      icon: 'trash',
+      className: 'btn-small btn-danger-ghost',
+      onClick: () => this.editor.removeLogo(),
+    });
+    this.logoWidth = sliderField({
+      label: '宽度',
+      min: 0.03,
+      max: 0.4,
+      step: 0.005,
+      value: 0.14,
+      format: (value) => percent(value, 1),
+      ariaLabel: 'Logo 宽度',
+      onInput: (value) => {
+        const block = this.logoBlock(this.editor.state);
+        if (block) this.editor.updateLogoBlock(block.id, { width: value });
+      },
+    });
+    this.logoFilled = h('div', { class: 'logo-filled', hidden: true }, [
+      h('div', { class: 'logo-preview' }, [this.logoPreviewImg]),
+      h('div', { class: 'row-actions' }, [replace, remove]),
+      this.logoWidth.root,
+    ]);
+
+    this.logoSection = section({
+      index: '05',
+      title: 'Logo',
+      open: true,
+      body: h('div', {}, [
+        this.logoEmpty,
+        this.logoFilled,
+        h('p', { class: 'sec-note', text: '位置与不透明度在右侧检查器中调整。' }),
+      ]),
+    });
+    return this.logoSection;
+  }
+
+  // ------------------------------------------------------------------ 更新
+
+  private update(state: EditorState): void {
+    toggleClass(this.root, 'is-open', state.leftOpen);
+
+    // 照片
+    if (state.photoThumb !== this.lastThumb) {
+      this.lastThumb = state.photoThumb;
+      if (state.photoThumb) this.photoThumb.src = state.photoThumb;
+      else this.photoThumb.removeAttribute('src');
+      toggleClass(this.photoThumb.parentElement ?? this.photoThumb, 'has-photo', Boolean(state.photoThumb));
+    }
+    const photo = state.photo;
+    setText(
+      this.photoBadge,
+      photo ? `${photo.width} × ${photo.height}` : '—',
+    );
+    setText(this.photoName, state.photoName || '尚未载入照片');
+    setText(
+      this.photoSub,
+      photo ? `${fileExt(state.photoName)} · 已载入渲染内核` : '拖入照片或选择示例',
+    );
+    this.photoEmpty.hidden = photo !== null;
+    this.setExif('camera', photo?.exif.camera || '—');
+    this.setExif('lens', photo?.exif.lens || '—');
+    this.setExif('exposure', exposureLine(state));
+    this.setExif('date', photo?.exif.date || '—');
+
+    // 边框
+    const config = state.config;
+    const frame = config?.frame;
+    const template = frame?.template ?? state.template;
+    for (const [key, card] of this.templateCards) {
+      const active = key === template;
+      toggleClass(card, 'is-active', active);
+      card.setAttribute('aria-pressed', String(active));
+    }
+    this.frameSection.setBadge(TEMPLATE_LABELS[template]);
+    const hasFrame = frame !== undefined;
+    const isNone = template === 'none';
+    this.marginField.setDisabled(!hasFrame || isNone);
+    this.bottomField.setDisabled(!hasFrame || isNone || template === 'black');
+    this.backgroundField.setDisabled(!hasFrame || isNone);
+    this.radiusField.setDisabled(!hasFrame || isNone);
+    this.holesRow.hidden = template !== 'film';
+    if (frame) {
+      this.marginField.setValue(frame.margin);
+      this.bottomField.setValue(frame.bottomRatio);
+      this.backgroundField.setValue(frame.background);
+      this.radiusField.setValue(frame.radius);
+      this.holesField.setValue(frame.filmHoles);
+    }
+
+    // 内容块
+    this.syncBlocks(state);
+
+    // 水印
+    const watermark = this.watermarkBlock(state);
+    const hasWatermark = watermark !== null && watermark.type === 'text';
+    this.wmEmpty.hidden = hasWatermark || state.config === null;
+    this.wmText.setDisabled(!hasWatermark);
+    this.wmFont.setDisabled(!hasWatermark);
+    this.wmSize.setDisabled(!hasWatermark);
+    this.wmColor.setDisabled(!hasWatermark);
+    if (watermark && watermark.type === 'text') {
+      this.wmText.setValue(watermark.text);
+      this.wmFont.setValue(watermark.font);
+      this.wmSize.setValue(watermark.size);
+      this.wmColor.setValue(watermark.color);
+    }
+
+    // Logo
+    const logo = this.logoBlock(state);
+    this.logoSection.setBadge(logo ? '已添加' : null);
+    this.logoEmpty.hidden = logo !== null;
+    this.logoFilled.hidden = logo === null;
+    if (logo && logo.type === 'logo') {
+      if (logo.src !== this.lastLogoSrc) {
+        this.lastLogoSrc = logo.src;
+        this.logoPreviewImg.src = logo.src;
+      }
+      this.logoWidth.setValue(logo.width);
+      this.logoWidth.setDisabled(false);
+    } else {
+      this.logoWidth.setDisabled(true);
+      if (this.lastLogoSrc) {
+        this.lastLogoSrc = '';
+        this.logoPreviewImg.removeAttribute('src');
+      }
+    }
+  }
+
+  private setExif(key: string, value: string): void {
+    const el = this.exifValues.get(key);
+    if (el) setText(el, value);
+  }
+}

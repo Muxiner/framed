@@ -1,0 +1,211 @@
+# 框影 · Framed
+
+> 把照片装进相机取景框：**边框 + 拍摄参数 + 文字/Logo 水印**，12 栅格排版，实时预览，一键导出。
+> Rust 内核一次实现，同时编译成 **WebAssembly（网页）** 与 **原生（Tauri 桌面 / CLI）**。
+
+![框影 Framed 白边模板](docs/screenshots/template-white.jpg)
+
+## 它是什么
+
+旅行回来，照片好看，但总觉得少了点「作品感」。框影把相机取景框的那套仪式感搬过来：
+
+- 自动读取 **EXIF**：机型、镜头、焦距、光圈、快门、ISO、拍摄时间；
+- 给照片加**边框**（白边 / 拍立得 / 胶片 / 黑框 / 无边框），参数排进留白里；
+- 文字与参数**逐项可编辑**：内容、字体、字号、字重、颜色、透明度、字间距、对齐、阴影；
+- 位置用 **12 等分栅格**：12×12 网格、吸附网格线、9 宫格预设、画布上直接拖拽；
+- 支持 **Logo 水印**（上传 PNG）；
+- 导出 **PNG / JPEG**，可设长边与质量；
+- **同一套 Rust 内核**：网页用 wasm、桌面用原生 Tauri、命令行用原生可执行文件，三端构图逐像素一致。
+
+## 模板
+
+| 白边 | 拍立得 | 胶片 |
+| --- | --- | --- |
+| ![白边](docs/screenshots/template-white.jpg) | ![拍立得](docs/screenshots/template-polaroid.jpg) | ![胶片](docs/screenshots/template-film.jpg) |
+
+| 黑框 | 无边框 |
+| --- | --- |
+| ![黑框](docs/screenshots/template-black.jpg) | ![无边框](docs/screenshots/template-none.jpg) |
+
+## 界面
+
+![编辑器](docs/screenshots/ui-home.jpg)
+
+三栏布局：左侧「照片 / 边框 / 内容块」，中间画布，右侧检查器（画布 / 导出 / 快捷键，选中元素后变为排版参数 + 12×12 定位器）。
+
+| 12 栅格 + 选中块检查器 | 窄屏（390px） |
+| --- | --- |
+| ![栅格与检查器](docs/screenshots/ui-grid.jpg) | ![窄屏](docs/screenshots/ui-mobile.jpg) |
+
+- 画布支持缩放 / 适应窗口、12 栅格参考线、吸附开关；
+- 拖拽文字块吸附到 1/12 网格（按住 Alt 临时关闭吸附），方向键 1/144 微调（Shift 1/12）；
+- 快捷键：`G` 参考线、`S` 吸附、`F` 适应窗口、`Esc` 取消选中、`⌘/Ctrl+E` 导出。
+
+## 架构
+
+```
+                      ┌────────────────────────────┐
+                      │  crates/core（Rust 内核）   │
+                      │  EXIF · 边框 · 文字光栅化    │
+                      │  12 栅格布局 · PNG/JPEG 编码 │
+                      └────────────┬───────────────┘
+                                   │
+             ┌─────────────────────┼──────────────────────┐
+             │                     │                      │
+   crates/wasm（C ABI）    crates/cli（原生 CLI）   apps/desktop（Tauri 命令）
+             │                     │                      │
+   apps/web（Vite + 原生 TS 编辑器，同一套 UI）
+             │
+   浏览器 / Tauri WebView
+```
+
+- **内核**：`crates/core` 不依赖任何平台 API，字体以子集形式内嵌（Inter / JetBrains Mono / Noto Sans SC 子集，约 4.6 MB）。
+- **网页**：`crates/wasm` 手写 C ABI（不引入 wasm-bindgen），前端 `WebAssembly.instantiate` 后按 `[u32 json_len][json][u32 bin_len][bin]` 读取结果。
+- **桌面**：Tauri v2，前端同一份 `apps/web/dist`，渲染走原生命令（图片只上传一次，之后只传配置）。
+- **CLI**：`framed` 可执行文件，适合批处理与验收。
+
+接口与配置字段的唯一权威说明见 [`docs/CONTRACT.md`](docs/CONTRACT.md)。
+
+## 快速开始
+
+### 网页版
+
+```bash
+# 1. 构建 wasm（需要 rustup target add wasm32-unknown-unknown）
+./scripts/build-wasm.sh
+
+# 2. 安装依赖并启动开发服务器
+npm --prefix apps/web install
+npm --prefix apps/web run dev          # http://localhost:5173
+
+# 或构建静态站点
+./scripts/build-web.sh                 # 产物在 apps/web/dist
+```
+
+### 桌面版（macOS / Windows / Linux）
+
+```bash
+npm --prefix apps/desktop install
+./scripts/build-desktop.sh             # 产出 apps/desktop/src-tauri/target/release/bundle/macos/Framed.app
+open apps/desktop/src-tauri/target/release/bundle/macos/Framed.app
+```
+
+桌面端渲染走原生 Rust（不加载 wasm），导出使用系统保存对话框。
+
+### 命令行 / 原生可执行文件
+
+```bash
+cargo build --release -p framed-cli
+./target/release/framed probe  photo.jpg
+./target/release/framed render photo.jpg -t film -o framed.jpg
+./target/release/framed demo   photo.jpg --out-dir /tmp/demo   # 一次渲染 5 个模板
+```
+
+`framed render` 支持 `-t/--template`、`-c/--config`（自定义 RenderConfig JSON）、`--max-dim`、`--margin`、`--watermark`、`--jpeg`、`--quality`。
+
+## 12 等分栅格怎么用
+
+成品画布（含边框）被 12×12 等分为网格：
+
+- 拖动文字块时自动吸附到最近的 `1/12` 格线（可关闭吸附）；
+- 右侧检查器有 **144 格定位器**，点哪一格，文字锚点就落在哪；
+- 9 宫格预设一键摆到左上 / 上中 / 右上 / 左中 / 居中 / 右中 / 左下 / 下中 / 右下；
+- `x / y` 仍可数值微调，`align / alignY` 决定文字相对锚点的伸展方向。
+
+配置里的坐标全部是 `0..1` 的归一化值，因此同一份配置在任意分辨率、任意端上构图一致。
+
+## 配置示例
+
+```json
+{
+  "version": 1,
+  "frame": {
+    "template": "white",
+    "margin": 0.045,
+    "bottomRatio": 3.0,
+    "background": "#f6f3ee",
+    "radius": 0,
+    "filmHoles": true
+  },
+  "blocks": [
+    {
+      "type": "text",
+      "id": "camera",
+      "name": "机型",
+      "text": "SONY ILCE-7M4 · FE 16-35mm F2.8 GM",
+      "x": 0.03, "y": 0.9,
+      "align": "left", "alignY": "top",
+      "font": "sans", "weight": 600, "size": 1.0,
+      "lineHeight": 1.35, "letterSpacing": 0,
+      "color": "#1b1a17", "opacity": 1, "visible": true, "shadow": false
+    }
+  ],
+  "grid": { "columns": 12, "rows": 12, "snap": true, "visible": false },
+  "output": { "format": "png", "quality": 92, "maxDim": 0 }
+}
+```
+
+## 项目结构
+
+```
+framed/
+├── crates/
+│   ├── core/          # 渲染内核（EXIF、边框、文字、布局、编码）+ 内嵌字体
+│   ├── cli/           # `framed` 命令行
+│   └── wasm/          # wasm32 cdylib，手写 C ABI
+├── apps/
+│   ├── web/           # Vite + 原生 TS 编辑器（网页 & Tauri 共用）
+│   └── desktop/       # Tauri v2 桌面壳（独立 cargo 工程）
+├── apps/web/public/samples/  # 示例照片（合成，带 EXIF）
+├── docs/CONTRACT.md   # 跨端契约（配置 schema / ABI / 命令 / UI 规范）
+├── scripts/           # wasm / web / desktop 构建，字体子集化，示例图生成
+└── AGENTS.md          # 给 AI 协作者的项目说明
+```
+
+## 开发
+
+```bash
+cargo test -p framed-core            # 内核单测（EXIF、混合、排版、渲染）
+cargo run -p framed-cli -- --help
+npm --prefix apps/web run typecheck
+npm --prefix apps/web run build
+npm --prefix apps/desktop run tauri dev
+```
+
+重新生成内嵌字体（改字符集时）：
+
+```bash
+python3 -m pip install fonttools
+PYTHONPATH=<fonttools> python3 scripts/build_fonts.py
+```
+
+重新生成示例照片：
+
+```bash
+python3 scripts/make_samples.py     # 需要 Pillow + numpy
+```
+
+> 中国大陆网络下，仓库内 `.cargo/config.toml` 已配置 rsproxy 镜像；npm 建议 `--registry=https://registry.npmmirror.com`。
+
+## 字体许可
+
+内嵌字体均为 SIL Open Font License 1.1，随包附带授权文本：
+
+- Inter — © The Inter Project Authors
+- JetBrains Mono — © JetBrains s.r.o.
+- Noto Sans SC — © Adobe / Google（Source Han Sans 系列）
+
+## 状态与路线图
+
+- [x] Rust 内核：EXIF、5 种边框、文字/Logo 水印、12 栅格、PNG/JPEG
+- [x] WebAssembly 网页版 + 网页编辑器
+- [x] Tauri v2 桌面版（原生渲染、系统保存对话框）
+- [x] 原生 CLI（批量渲染）
+- [ ] RAW（CR3/NEF/ARW）解码与缩略图
+- [ ] 多图批量套用同一模板
+- [ ] 自定义模板 / 用户字体上传
+- [ ] 移动端（iOS / Android）
+
+## License
+
+MIT © 2026 muxiner

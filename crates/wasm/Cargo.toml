@@ -1,0 +1,13 @@
+[package]
+name = "framed-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "框影 Framed 的 WebAssembly 导出层（手写 C ABI）"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+framed-core = { workspace = true }
+serde_json = { workspace = true }

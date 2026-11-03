@@ -1,0 +1,15 @@
+[package]
+name = "framed-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "框影 Framed 命令行：批量渲染照片边框"
+
+[[bin]]
+name = "framed"
+path = "src/main.rs"
+
+[dependencies]
+framed-core = { workspace = true }
+serde_json = { workspace = true }
+image = { workspace = true }

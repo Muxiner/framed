@@ -1,0 +1,15 @@
+[package]
+name = "framed-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "框影 Framed 渲染内核：EXIF、边框、文字/Logo 水印、12 栅格排版"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+thiserror = { workspace = true }
+image = { workspace = true }
+kamadak-exif = { workspace = true }
+ab_glyph = { workspace = true }

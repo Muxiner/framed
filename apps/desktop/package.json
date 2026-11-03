@@ -1,0 +1,17 @@
+{
+  "name": "framed-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "框影 Framed 桌面应用（Tauri v2 壳，渲染走原生 framed-core）",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:web": "npm --prefix ../web run build",
+    "icon": "tauri icon icons/source.png"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4"
+  }
+}

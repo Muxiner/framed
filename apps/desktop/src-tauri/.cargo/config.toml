@@ -1,0 +1,11 @@
+# Tauri 桌面壳（src-tauri）是独立 cargo 工程；这里只配 crates.io 镜像。
+# 环境限制：部分开发沙箱里 ~/.cargo 不可写，需要把 CARGO_HOME 指到可写目录
+# （见 scripts/build-desktop.sh 顶部的说明）。
+[source.crates-io]
+replace-with = "rsproxy-sparse"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[net]
+git-fetch-with-cli = true

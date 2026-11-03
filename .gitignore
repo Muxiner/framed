@@ -1,0 +1,24 @@
+# 依赖与构建产物
+target/
+**/target/
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+apps/web/public/framed_wasm.wasm
+apps/web/public/framed_wasm.wasm.map
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/target/
+.cargo-home/
+.dsh-tools/
+.tmp/
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# Python
+__pycache__/
+*.pyc
