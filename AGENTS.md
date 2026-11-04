@@ -80,6 +80,12 @@ npm --prefix apps/web run build      # 含 tsc --noEmit
 
 肉眼检查 `/tmp/demo` 的 5 张图：文字不溢出、参数行不重叠、底栏留白合理、胶片齿孔对齐；再跑桌面 `./scripts/build-desktop.sh`（如涉及桌面改动）。
 
+## 性能约定
+
+- 预览热路径：`prepare_photo` 解码一次 → `render_prepared`（`compose`）反复合成；**不要在每次参数变化时重新 `render(bytes, config)`**（会重新解码原图 + Lanczos，慢 10 倍）。
+- 预览编码用 JPEG(q90)，全尺寸导出才用用户在 output 里选的格式；wasm 端缓存放在 `PREPARED` 静态，桌面端放在 `PhotoState.preview`（`Arc<PreparedPhoto>`）。
+- 新增预览相关逻辑时，用 CDP 测一下 `engine.render(config, true)` 的单帧耗时（24MP 照片目标 < 80ms）。
+
 ## 常见坑
 
 - **EXIF 字段可能写在 IFD0 或 Exif 子 IFD**：内核按 tag number 查找（`field.tag.1`），不要用 `Tag` 的 `PartialEq`（它连同 Context 比较）。

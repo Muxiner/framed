@@ -41,38 +41,81 @@ pub struct RenderOutput {
     pub meta: RenderMeta,
 }
 
-/// 渲染一张图。
-pub fn render(image_bytes: &[u8], config: &RenderConfig) -> Result<RenderOutput> {
+/// 已解码、已按 EXIF 转正、并缩放到目标尺寸的照片。
+///
+/// 预览路径会把它缓存在引擎侧（wasm / 原生各一份），避免每次改参数都重新
+/// 解码原图 + Lanczos 缩放——这是编辑时「等 1 秒」的主要开销。
+#[derive(Debug, Clone)]
+pub struct PreparedPhoto {
+    pub image: RgbaImage,
+}
+
+/// 解码、转正，并按需把照片长边限制到 `max_photo_dim`。
+pub fn prepare_photo(image_bytes: &[u8], max_photo_dim: u32) -> Result<PreparedPhoto> {
     let decoded =
         image::load_from_memory(image_bytes).map_err(|err| EngineError::Image(err.to_string()))?;
     let orientation = exif::orientation(image_bytes);
     let oriented = imageops::apply_orientation(decoded.to_rgba8(), orientation);
 
-    // 预览/导出限长边：先缩放照片，再按缩放后的尺寸重算几何，
-    // 这样字号、边框比例与全尺寸渲染完全一致。
-    let (photo_w, photo_h) = (oriented.width(), oriented.height());
-    let base_geometry = geometry(&config.frame, photo_w, photo_h);
-    let max_dim = config.output.max_dim.min(20_000);
-    let long_edge = base_geometry.width.max(base_geometry.height) as f32;
-    let scale =
-        if max_dim > 0 && long_edge > max_dim as f32 { max_dim as f32 / long_edge } else { 1.0 };
-    let photo = if scale < 0.999 {
+    let (width, height) = (oriented.width(), oriented.height());
+    let limit = max_photo_dim.min(20_000);
+    let image = if limit > 0 && width.max(height) > limit {
+        let scale = limit as f32 / width.max(height) as f32;
         image::imageops::resize(
             &oriented,
-            ((photo_w as f32 * scale).round() as u32).max(1),
-            ((photo_h as f32 * scale).round() as u32).max(1),
+            ((width as f32 * scale).round() as u32).max(1),
+            ((height as f32 * scale).round() as u32).max(1),
             image::imageops::FilterType::Lanczos3,
         )
     } else {
         oriented
     };
+    Ok(PreparedPhoto { image })
+}
 
+/// 用已准备好的照片渲染（不再解码 / 缩放，预览热路径）。
+///
+/// 注意：`config.output.max_dim` 在这里被忽略——调用方应在 `prepare_photo`
+/// 时就把照片缩到预览尺寸，避免重复缩放。
+pub fn render_prepared(prepared: &PreparedPhoto, config: &RenderConfig) -> Result<RenderOutput> {
+    compose(&prepared.image, config)
+}
+
+/// 渲染一张图（完整解码 + 按成品长边限制缩放）。
+pub fn render(image_bytes: &[u8], config: &RenderConfig) -> Result<RenderOutput> {
+    let prepared = prepare_photo(image_bytes, 0)?;
+    let oriented = prepared.image;
+    let (photo_w, photo_h) = (oriented.width(), oriented.height());
+
+    // 预览/导出限长边：先缩放照片，再按缩放后的尺寸重算几何，
+    // 这样字号、边框比例与全尺寸渲染完全一致。
+    let base_geometry = geometry(&config.frame, photo_w, photo_h);
+    let max_dim = config.output.max_dim.min(20_000);
+    let long_edge = base_geometry.width.max(base_geometry.height) as f32;
+    let scale =
+        if max_dim > 0 && long_edge > max_dim as f32 { max_dim as f32 / long_edge } else { 1.0 };
+
+    if scale < 0.999 {
+        let photo = image::imageops::resize(
+            &oriented,
+            ((photo_w as f32 * scale).round() as u32).max(1),
+            ((photo_h as f32 * scale).round() as u32).max(1),
+            image::imageops::FilterType::Lanczos3,
+        );
+        compose(&photo, config)
+    } else {
+        compose(&oriented, config)
+    }
+}
+
+/// 边框、文字、Logo 合成 + 编码（渲染热路径，不含解码）。
+fn compose(photo: &RgbaImage, config: &RenderConfig) -> Result<RenderOutput> {
     let geom = geometry(&config.frame, photo.width(), photo.height());
     let background = imageops::to_rgba(parse_color(&config.frame.background));
     let mut canvas = RgbaImage::from_pixel(geom.width.max(1), geom.height.max(1), background);
 
     let radius = config.frame.radius.clamp(0.0, 0.25) * photo.width().min(photo.height()) as f32;
-    imageops::draw_photo(&mut canvas, &photo, geom.photo_x as i32, geom.photo_y as i32, radius);
+    imageops::draw_photo(&mut canvas, photo, geom.photo_x as i32, geom.photo_y as i32, radius);
 
     if config.frame.template == FrameTemplate::Film && config.frame.film_holes {
         draw_film_holes(&mut canvas, &geom);
@@ -302,6 +345,22 @@ mod tests {
         config.output.max_dim = 640;
         let output = render(&bytes, &config).unwrap();
         assert!(output.meta.width.max(output.meta.height) <= 640);
+    }
+
+    #[test]
+    fn prepared_photo_renders_without_redecoding() {
+        let bytes = test_image(1200, 800);
+        let prepared = prepare_photo(&bytes, 400).unwrap();
+        assert_eq!(prepared.image.width().max(prepared.image.height()), 400);
+
+        let mut config = RenderConfig::default();
+        config.output.format = OutputFormat::Jpeg;
+        let output = render_prepared(&prepared, &config).unwrap();
+        assert_eq!(output.mime, "image/jpeg");
+        let short_side = prepared.image.width().min(prepared.image.height()) as f32;
+        let margin = (0.045_f32 * short_side).round() as u32;
+        assert_eq!(output.meta.width, prepared.image.width() + margin * 2);
+        assert!(output.meta.height > prepared.image.height());
     }
 
     #[test]

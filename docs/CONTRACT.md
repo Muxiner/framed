@@ -186,8 +186,10 @@ interface Engine {
 framed_alloc(len: u32) -> *mut u8
 framed_free(ptr: *mut u8, len: u32)
 framed_probe(ptr: *const u8, len: u32) -> *mut u8
+framed_prepare(ptr: *const u8, len: u32, max_dim: u32) -> *mut u8   # 解码+转正+缩放并缓存预览底图
 framed_default_config(ptr: *const u8, len: u32) -> *mut u8
-framed_render(img_ptr: *const u8, img_len: u32, cfg_ptr: *const u8, cfg_len: u32) -> *mut u8
+framed_render_preview(cfg_ptr: *const u8, cfg_len: u32) -> *mut u8  # 用缓存底图合成 + JPEG（热路径）
+framed_render(img_ptr: *const u8, img_len: u32, cfg_ptr: *const u8, cfg_len: u32) -> *mut u8  # 全尺寸导出
 ```
 
 返回缓冲区格式（小端）：
@@ -214,7 +216,7 @@ export_image(config_json: String, suggested_name: String) -> Option<String>
 export_batch(items_json: String) -> { saved, paths, canceled }       # 选目录后批量写入
 ```
 
-- 渲染走原生 `framed-core`，不加载 wasm；`render_image` 内部把 `output.maxDim` 限制为 1600。
+- 渲染走原生 `framed-core`，不加载 wasm；`render_image` 是预览热路径：复用 `PhotoState` 里已解码的预览底图，只合成 + JPEG(q90) 编码后返回。
 - `export_image` 用 `tauri-plugin-dialog` 弹保存框，返回保存路径；`export_batch` 弹一次文件夹选择框，按 `items_json` 里的 `{id, filename, config}` 逐张写入（文件名做路径穿越过滤）。
 - 窗口设置 `dragDropEnabled: false`，让 WebView 接收 HTML5 文件拖放（否则拖拽会被原生拖放拦截）。
 - 前端通过 `window.__TAURI__.core.invoke(...)` 调用（`withGlobalTauri: true`）。
@@ -253,7 +255,8 @@ export_batch(items_json: String) -> { saved, paths, canceled }       # 选目录
 - 画布 = 照片 + 边框；`margin` 相对于照片短边；`white` 底边 = `margin * bottomRatio`。
 - 基准字号 = `min(canvas_w, canvas_h) * 0.018 * block.size`。
 - 字体回退链：sans → Inter → Noto Sans SC；mono → JetBrains Mono → Noto Sans SC；cjk → Noto Sans SC → Inter。
-- 预览：`render(config, preview=true)` 自动限长边 1600，且与原图构图一致。
+- **预览性能**：照片载入/切换时 `prepare_photo`（wasm 侧缓存）解码 + 按 EXIF 转正 + 缩放（照片长边 1400）；之后每次改参数只走 `compose`（边框/文字/Logo）+ JPEG(q90) 编码。预览不再重复解码原图。桌面端把底图缓存在 `PhotoState.preview`，wasm 端缓存在静态 `PREPARED`。
+- 预览构图与原图一致（`render_prepared` 用同一套几何），全尺寸导出仍走 `render` 解码原图。
 - 导出：`output.maxDim > 0` 时长边缩到该值；JPEG 质量取 `quality`。
 
 ## 6. 默认配置（`default_config`）

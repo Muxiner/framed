@@ -107,6 +107,15 @@ cargo build --release -p framed-cli
 
 `framed render` 支持 `-t/--template`、`-c/--config`（自定义 RenderConfig JSON）、`--max-dim`、`--margin`、`--watermark`、`--jpeg`、`--quality`。
 
+## 预览性能
+
+改字号、拖位置、调边距时，预览不会再等一两秒：
+
+- 照片在载入/切换时**只解码、转正、缩放一次**（wasm 与桌面端各自缓存预览底图，长边 1400）；
+- 之后每次改参数只重新合成边框/文字/Logo，并以 JPEG(q90) 返回预览位图；
+- 全尺寸导出时才重新解码原图。
+- 实测（Apple Silicon / Chromium）：24 MP 照片预览单帧约 **40–60 ms**（优化前约 400–900 ms），编辑基本无感。
+
 ## 12 等分栅格怎么用
 
 成品画布（含边框）被 12×12 等分为网格：

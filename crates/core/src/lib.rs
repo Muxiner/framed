@@ -22,7 +22,9 @@ pub use config::{
 };
 pub use exif::{probe, ExifInfo, PhotoInfo};
 pub use layout::{default_config, geometry, Geometry};
-pub use render::{render, BlockRect, RenderMeta, RenderOutput};
+pub use render::{
+    prepare_photo, render, render_prepared, BlockRect, PreparedPhoto, RenderMeta, RenderOutput,
+};
 
 /// 内核统一错误类型。
 #[derive(Debug, thiserror::Error)]

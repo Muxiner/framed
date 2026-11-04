@@ -1,6 +1,10 @@
 // 网页引擎：加载 framed_wasm.wasm（手写 C ABI，无 wasm-bindgen），
 // 打包格式见 docs/CONTRACT.md §3.2。
-// 多图模式：照片字节缓存在 JS 侧（Map<id, bytes>），切换时重新写入 wasm 线性内存。
+//
+// 性能要点：
+// - `framed_prepare` 在载入/切换照片时解码 + 转正 + 缩放一次，wasm 侧缓存底图；
+// - 每次改参数走 `framed_render_preview`，只重新合成 + JPEG 编码（不再解码原图）；
+// - 全尺寸导出/批量导出才 `framed_render` 解码原图。
 import type {
   BatchExportItem,
   BatchExportResult,
@@ -18,6 +22,8 @@ interface WasmExports {
   framed_alloc(len: number): number;
   framed_free(ptr: number, len: number): void;
   framed_probe(ptr: number, len: number): number;
+  framed_prepare(ptr: number, len: number, maxDim: number): number;
+  framed_render_preview(cfgPtr: number, cfgLen: number): number;
   framed_default_config(ptr: number, len: number): number;
   framed_render(imgPtr: number, imgLen: number, cfgPtr: number, cfgLen: number): number;
 }
@@ -26,6 +32,9 @@ interface Packed {
   json: Record<string, unknown>;
   bin: Uint8Array;
 }
+
+/** 预览底图长边（照片本身，不含边框），与 wasm/桌面端保持一致。 */
+const PREVIEW_PHOTO_DIM = 1400;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -59,20 +68,6 @@ function writeBytes(exports: WasmExports, bytes: Uint8Array): number {
   return ptr;
 }
 
-function withJson<T>(
-  exports: WasmExports,
-  fn: (ptr: number, len: number) => number,
-  payload: unknown,
-): T {
-  const bytes = encoder.encode(JSON.stringify(payload));
-  const ptr = writeBytes(exports, bytes);
-  try {
-    return parsePacked(exports, fn(ptr, bytes.length)).json as T;
-  } finally {
-    exports.framed_free(ptr, bytes.length);
-  }
-}
-
 function downloadBlob(bytes: Uint8Array, filename: string, mime: string): void {
   const blob = new Blob([bytes as unknown as BlobPart], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -89,8 +84,6 @@ class WasmEngine implements Engine {
   readonly kind = 'wasm' as const;
 
   private exports: WasmExports;
-  private imagePtr = 0;
-  private imageLen = 0;
   private photos = new Map<string, Uint8Array>();
   private currentId: string | null = null;
 
@@ -101,59 +94,65 @@ class WasmEngine implements Engine {
   async loadImage(bytes: Uint8Array, id: string = nextPhotoId()): Promise<PhotoInfo> {
     const cached = bytes.slice();
     this.photos.set(id, cached);
-    return this.activate(id, cached);
+    // 导入阶段只做轻量探测（读尺寸 + EXIF），真正的解码/缩放推迟到
+    // 切换激活（selectImage）时，避免一次导入 N 张时做 N 次重解码。
+    const ptr = writeBytes(this.exports, cached);
+    try {
+      return parsePacked(this.exports, this.exports.framed_probe(ptr, cached.length))
+        .json as unknown as PhotoInfo;
+    } finally {
+      this.exports.framed_free(ptr, cached.length);
+    }
   }
 
   async selectImage(id: string, bytes?: Uint8Array): Promise<PhotoInfo> {
     if (bytes) this.photos.set(id, bytes.slice());
     const cached = this.photos.get(id);
     if (!cached) throw new Error('照片不在内存中，请重新导入');
-    return this.activate(id, cached);
+    return this.prepare(id, cached);
   }
 
-  private activate(id: string, bytes: Uint8Array): PhotoInfo {
-    this.releaseImage();
+  /** 解码 + 缩放并让 wasm 侧缓存预览底图。 */
+  private prepare(id: string, bytes: Uint8Array): PhotoInfo {
     const ptr = writeBytes(this.exports, bytes);
-    this.imagePtr = ptr;
-    this.imageLen = bytes.length;
     try {
-      const info = parsePacked(this.exports, this.exports.framed_probe(ptr, bytes.length))
-        .json as unknown as PhotoInfo;
+      const packed = parsePacked(
+        this.exports,
+        this.exports.framed_prepare(ptr, bytes.length, PREVIEW_PHOTO_DIM),
+      );
       this.currentId = id;
-      return info;
-    } catch (err) {
-      this.releaseImage();
-      this.currentId = null;
-      throw err;
+      return packed.json as unknown as PhotoInfo;
+    } finally {
+      this.exports.framed_free(ptr, bytes.length);
     }
   }
 
   async defaultConfig(photo: PhotoInfo, template: FrameTemplate): Promise<RenderConfig> {
-    return withJson<RenderConfig>(
-      this.exports,
-      (p, len) => this.exports.framed_default_config(p, len),
-      { photo, template },
-    );
+    const bytes = encoder.encode(JSON.stringify({ photo, template }));
+    const ptr = writeBytes(this.exports, bytes);
+    try {
+      return parsePacked(this.exports, this.exports.framed_default_config(ptr, bytes.length))
+        .json as unknown as RenderConfig;
+    } finally {
+      this.exports.framed_free(ptr, bytes.length);
+    }
   }
 
   async render(config: RenderConfig, preview: boolean): Promise<RenderResult> {
-    if (!this.imagePtr) throw new Error('尚未加载照片');
-    const tuned: RenderConfig = preview
-      ? {
-          ...config,
-          output: {
-            ...config.output,
-            format: 'png',
-            maxDim: config.output.maxDim > 0 ? Math.min(1600, config.output.maxDim) : 1600,
-          },
-        }
-      : config;
+    if (!this.currentId) throw new Error('尚未加载照片');
+    if (!preview) return this.renderFull(this.currentId, config);
+
+    // 预览：复用 wasm 侧缓存的底图，只合成 + JPEG 编码。
+    const tuned: RenderConfig = {
+      ...config,
+      output: { ...config.output, format: 'jpeg', quality: 90, maxDim: 0 },
+    };
     const cfg = encoder.encode(JSON.stringify(tuned));
     const cfgPtr = writeBytes(this.exports, cfg);
     try {
       const packed = parsePacked(
         this.exports,
-        this.exports.framed_render(this.imagePtr, this.imageLen, cfgPtr, cfg.length),
+        this.exports.framed_render_preview(cfgPtr, cfg.length),
       );
       return { png: packed.bin, meta: packed.json as unknown as RenderMeta };
     } finally {
@@ -161,38 +160,44 @@ class WasmEngine implements Engine {
     }
   }
 
+  /** 全尺寸渲染（导出用）：解码原图，按配置编码。 */
+  private renderFull(id: string, config: RenderConfig): RenderResult {
+    const bytes = this.photos.get(id);
+    if (!bytes) throw new Error('照片不在内存中，请重新导入');
+    const imgPtr = writeBytes(this.exports, bytes);
+    const cfg = encoder.encode(JSON.stringify(config));
+    const cfgPtr = writeBytes(this.exports, cfg);
+    try {
+      const packed = parsePacked(
+        this.exports,
+        this.exports.framed_render(imgPtr, bytes.length, cfgPtr, cfg.length),
+      );
+      return { png: packed.bin, meta: packed.json as unknown as RenderMeta };
+    } finally {
+      this.exports.framed_free(cfgPtr, cfg.length);
+      this.exports.framed_free(imgPtr, bytes.length);
+    }
+  }
+
   async exportImage(config: RenderConfig, suggestedName: string): Promise<ExportResult> {
-    const rendered = await this.render(config, false);
+    if (!this.currentId) throw new Error('尚未加载照片');
+    const rendered = this.renderFull(this.currentId, config);
     const mime = config.output.format === 'jpeg' ? 'image/jpeg' : 'image/png';
     downloadBlob(rendered.png, suggestedName, mime);
     return {};
   }
 
   async exportBatch(items: BatchExportItem[]): Promise<BatchExportResult> {
-    if (!this.currentId) throw new Error('尚未加载照片');
-    const current = this.currentId;
     const paths: string[] = [];
     for (const item of items) {
-      await this.selectImage(item.id);
-      const rendered = await this.render(item.config, false);
+      const rendered = this.renderFull(item.id, item.config);
       const mime = item.config.output.format === 'jpeg' ? 'image/jpeg' : 'image/png';
       downloadBlob(rendered.png, item.filename, mime);
       paths.push(item.filename);
       // 浏览器对连续下载有节流，放慢一点更稳。
       await sleep(420);
     }
-    if (this.currentId !== current) {
-      await this.selectImage(current);
-    }
     return { saved: paths.length, method: 'download', paths };
-  }
-
-  private releaseImage(): void {
-    if (this.imagePtr) {
-      this.exports.framed_free(this.imagePtr, this.imageLen);
-      this.imagePtr = 0;
-      this.imageLen = 0;
-    }
   }
 }
 

@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD};
@@ -24,6 +24,10 @@ use tauri_plugin_dialog::DialogExt;
 /// `render_image`（预览）内部把长边限制到该值（CONTRACT §3.3）。
 const PREVIEW_MAX_DIM: u32 = 1600;
 
+/// 预览底图的长边（照片本身，不含边框）：解码 + 缩放只做一次，
+/// 之后每次改参数只重新合成与编码。
+const PREVIEW_PHOTO_DIM: u32 = 1400;
+
 /// 当前照片 + 多图缓存（多图模式下每张照片只上传一次，切换按 id 取）。
 struct PhotoCache(Mutex<PhotoState>);
 
@@ -31,6 +35,8 @@ struct PhotoCache(Mutex<PhotoState>);
 struct PhotoState {
     current: Option<String>,
     photos: HashMap<String, Vec<u8>>,
+    /// 当前照片的预览底图（已解码 / 转正 / 缩放），随当前照片缓存。
+    preview: Option<(String, Arc<framed_core::PreparedPhoto>)>,
 }
 
 static PHOTO_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -46,7 +52,8 @@ fn new_photo_id() -> String {
 
 /// 一次原生渲染的结果。
 struct Rendered {
-    /// 带 `ok: true` 的 RenderMeta JSON。
+    /// 带 `ok: true` 的 RenderMeta JSON（测试里用于校验打包格式）。
+    #[allow(dead_code)]
     meta_json: String,
     /// 渲染后的图片字节（PNG / JPEG）。
     bytes: Vec<u8>,
@@ -69,9 +76,7 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     if let Ok(bytes) = URL_SAFE.decode(payload) {
         return Ok(bytes);
     }
-    URL_SAFE_NO_PAD
-        .decode(payload)
-        .map_err(|err| format!("base64 解码失败：{err}"))
+    URL_SAFE_NO_PAD.decode(payload).map_err(|err| format!("base64 解码失败：{err}"))
 }
 
 /// 打包为 [u32 meta_len][meta][u32 bin_len][bin]。
@@ -92,32 +97,44 @@ fn pack_error(message: &str) -> Vec<u8> {
 
 /// 缓存里取当前照片（克隆一份，避免长时间持锁）。
 fn current_photo(state: &State<'_, PhotoCache>) -> Result<Vec<u8>, String> {
-    let guard = state
-        .0
-        .lock()
-        .map_err(|_| "照片缓存锁已损坏，请重新加载照片".to_string())?;
-    let id = guard
-        .current
-        .clone()
-        .ok_or_else(|| "尚未载入照片，请先上传照片".to_string())?;
-    guard
+    let guard = state.0.lock().map_err(|_| "照片缓存锁已损坏，请重新加载照片".to_string())?;
+    let id = guard.current.clone().ok_or_else(|| "尚未载入照片，请先上传照片".to_string())?;
+    guard.photos.get(&id).cloned().ok_or_else(|| "当前照片不在缓存中，请重新导入".to_string())
+}
+
+/// 当前照片的预览底图；缓存未命中时现做一次（解码 + 缩放 ~200ms）。
+fn current_preview(
+    state: &State<'_, PhotoCache>,
+) -> Result<Arc<framed_core::PreparedPhoto>, String> {
+    let guard = state.0.lock().map_err(|_| "照片缓存锁已损坏".to_string())?;
+    let id = guard.current.clone().ok_or_else(|| "尚未载入照片，请先上传照片".to_string())?;
+    if let Some((cached_id, prepared)) = &guard.preview {
+        if cached_id == &id {
+            return Ok(prepared.clone());
+        }
+    }
+    let bytes = guard
         .photos
         .get(&id)
         .cloned()
-        .ok_or_else(|| "当前照片不在缓存中，请重新导入".to_string())
+        .ok_or_else(|| "当前照片不在缓存中，请重新导入".to_string())?;
+    drop(guard);
+
+    let prepared = Arc::new(
+        framed_core::prepare_photo(&bytes, PREVIEW_PHOTO_DIM)
+            .map_err(|err| format!("准备预览失败：{err}"))?,
+    );
+    let mut guard = state.0.lock().map_err(|_| "照片缓存锁已损坏".to_string())?;
+    if guard.current.as_deref() == Some(id.as_str()) {
+        guard.preview = Some((id, prepared.clone()));
+    }
+    Ok(prepared)
 }
 
 /// 按 id 取已缓存照片字节。
 fn photo_bytes(state: &State<'_, PhotoCache>, id: &str) -> Result<Vec<u8>, String> {
-    let guard = state
-        .0
-        .lock()
-        .map_err(|_| "照片缓存锁已损坏".to_string())?;
-    guard
-        .photos
-        .get(id)
-        .cloned()
-        .ok_or_else(|| format!("照片 {id} 不在缓存中，请重新导入"))
+    let guard = state.0.lock().map_err(|_| "照片缓存锁已损坏".to_string())?;
+    guard.photos.get(id).cloned().ok_or_else(|| format!("照片 {id} 不在缓存中，请重新导入"))
 }
 
 /// 只保留安全的文件名字符，避免路径穿越。
@@ -149,11 +166,8 @@ fn render_photo(photo: &[u8], config_json: &str, preview: bool) -> Result<Render
 
     if preview {
         let max_dim = config.output.max_dim;
-        config.output.max_dim = if max_dim == 0 || max_dim > PREVIEW_MAX_DIM {
-            PREVIEW_MAX_DIM
-        } else {
-            max_dim
-        };
+        config.output.max_dim =
+            if max_dim == 0 || max_dim > PREVIEW_MAX_DIM { PREVIEW_MAX_DIM } else { max_dim };
     }
 
     let output = framed_core::render(photo, &config).map_err(|err| format!("渲染失败：{err}"))?;
@@ -171,10 +185,34 @@ fn render_photo(photo: &[u8], config_json: &str, preview: bool) -> Result<Render
     };
     meta.insert("ok".to_string(), Value::Bool(true));
 
-    Ok(Rendered {
-        meta_json: Value::Object(meta).to_string(),
-        bytes: output.bytes,
-    })
+    Ok(Rendered { meta_json: Value::Object(meta).to_string(), bytes: output.bytes })
+}
+
+/// 预览渲染（热路径）：复用已解码底图，只合成 + JPEG 编码。
+fn render_preview_photo(
+    prepared: &framed_core::PreparedPhoto,
+    config_json: &str,
+) -> Result<Rendered, String> {
+    let mut config: framed_core::RenderConfig =
+        serde_json::from_str(config_json).map_err(|err| format!("渲染配置解析失败：{err}"))?;
+    config.output.format = framed_core::config::OutputFormat::Jpeg;
+    config.output.quality = 90;
+    config.output.max_dim = 0;
+
+    let output = framed_core::render_prepared(prepared, &config)
+        .map_err(|err| format!("渲染失败：{err}"))?;
+    let mut meta = match serde_json::to_value(&output.meta)
+        .map_err(|err| format!("渲染元数据序列化失败：{err}"))?
+    {
+        Value::Object(map) => map,
+        other => {
+            let mut map = Map::new();
+            map.insert("meta".to_string(), other);
+            map
+        }
+    };
+    meta.insert("ok".to_string(), Value::Bool(true));
+    Ok(Rendered { meta_json: Value::Object(meta).to_string(), bytes: output.bytes })
 }
 
 /// 根据配置里的 output.format 决定保存扩展名与过滤器名称。
@@ -227,12 +265,10 @@ fn load_image(
     let info = framed_core::probe(&bytes).map_err(|err| format!("解析照片失败：{err}"))?;
     let id = photo_id.filter(|id| !id.is_empty()).unwrap_or_else(new_photo_id);
     {
-        let mut guard = state
-            .0
-            .lock()
-            .map_err(|_| "照片缓存锁已损坏".to_string())?;
+        let mut guard = state.0.lock().map_err(|_| "照片缓存锁已损坏".to_string())?;
         guard.photos.insert(id.clone(), bytes);
         guard.current = Some(id);
+        guard.preview = None;
     }
     Ok(info)
 }
@@ -245,12 +281,14 @@ fn select_image(
 ) -> Result<framed_core::PhotoInfo, String> {
     let bytes = photo_bytes(&state, &photo_id)?;
     let info = framed_core::probe(&bytes).map_err(|err| format!("解析照片失败：{err}"))?;
+    let prepared = Arc::new(
+        framed_core::prepare_photo(&bytes, PREVIEW_PHOTO_DIM)
+            .map_err(|err| format!("准备预览失败：{err}"))?,
+    );
     {
-        let mut guard = state
-            .0
-            .lock()
-            .map_err(|_| "照片缓存锁已损坏".to_string())?;
-        guard.current = Some(photo_id);
+        let mut guard = state.0.lock().map_err(|_| "照片缓存锁已损坏".to_string())?;
+        guard.current = Some(photo_id.clone());
+        guard.preview = Some((photo_id, prepared));
     }
     Ok(info)
 }
@@ -271,8 +309,8 @@ fn default_config(photo_json: String, template: String) -> Result<String, String
 #[tauri::command(async)]
 fn render_image(config_json: String, state: State<'_, PhotoCache>) -> Response {
     let result = (|| -> Result<Vec<u8>, String> {
-        let photo = current_photo(&state)?;
-        let rendered = render_photo(&photo, &config_json, true)?;
+        let prepared = current_preview(&state)?;
+        let rendered = render_preview_photo(prepared.as_ref(), &config_json)?;
         Ok(pack(&rendered.meta_json, &rendered.bytes))
     })();
 
@@ -307,9 +345,7 @@ fn export_image(
         return Ok(None);
     };
 
-    let path = file_path
-        .into_path()
-        .map_err(|err| format!("保存路径无效：{err}"))?;
+    let path = file_path.into_path().map_err(|err| format!("保存路径无效：{err}"))?;
     std::fs::write(&path, &rendered.bytes).map_err(|err| format!("写入文件失败：{err}"))?;
     Ok(Some(path.display().to_string()))
 }
@@ -345,17 +381,11 @@ fn export_batch(
         rendered.push((sanitize_filename(&item.filename), output.bytes));
     }
 
-    let picked = app
-        .dialog()
-        .file()
-        .set_title("选择批量导出文件夹")
-        .blocking_pick_folder();
+    let picked = app.dialog().file().set_title("选择批量导出文件夹").blocking_pick_folder();
     let Some(folder) = picked else {
         return Ok(json!({ "saved": 0, "paths": [], "canceled": true }));
     };
-    let folder = folder
-        .into_path()
-        .map_err(|err| format!("目录路径无效：{err}"))?;
+    let folder = folder.into_path().map_err(|err| format!("目录路径无效：{err}"))?;
     std::fs::create_dir_all(&folder).map_err(|err| format!("创建目录失败：{err}"))?;
 
     let mut paths = Vec::with_capacity(rendered.len());
@@ -456,6 +486,22 @@ mod tests {
         let data_url = format!("data:image/png;base64,{encoded}");
         assert_eq!(decode_base64(&data_url).unwrap(), TINY_PNG);
         assert!(decode_base64("").is_err());
+    }
+
+    /// 预览走缓存底图 + JPEG，尺寸来自底图而非原图。
+    #[test]
+    fn preview_uses_cached_jpeg() {
+        let prepared =
+            framed_core::prepare_photo(TINY_PNG, PREVIEW_PHOTO_DIM).expect("prepare 应成功");
+        let photo = framed_core::probe(TINY_PNG).expect("probe 应成功");
+        let config = framed_core::default_config(&photo, framed_core::FrameTemplate::White);
+        let config_json = serde_json::to_string(&config).unwrap();
+
+        let rendered = render_preview_photo(&prepared, &config_json).expect("预览渲染应成功");
+        assert_eq!(&rendered.bytes[..2], &[0xFF, 0xD8], "预览应为 JPEG");
+        let meta: Value = serde_json::from_str(&rendered.meta_json).unwrap();
+        assert_eq!(meta["ok"], Value::Bool(true));
+        assert!(meta["width"].as_u64().unwrap() >= 4);
     }
 
     /// 批量导出文件名过滤路径分隔符，防止写出目录。
