@@ -62,6 +62,14 @@ export class Stage {
   private readonly previewCtx: CanvasRenderingContext2D;
 
   private drag: DragState | null = null;
+  private pan: {
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    scrollLeft: number;
+    scrollTop: number;
+    moved: boolean;
+  } | null = null;
   private hoverId: string | null = null;
   private lastMeta: EditorState['meta'] = null;
   private lastBitmap: EditorState['bitmap'] = null;
@@ -77,7 +85,7 @@ export class Stage {
     this.overlay = h('canvas', {
       class: 'canvas-overlay',
       tabindex: 0,
-      ariaLabel: '画布预览：拖拽移动选中元素，方向键微调',
+      ariaLabel: '画布预览：拖拽文字块移动，空白处拖动平移画布，方向键微调',
     });
     const previewCtx = this.preview.getContext('2d');
     if (!previewCtx) throw new Error('Canvas 2D 不可用');
@@ -627,6 +635,18 @@ export class Stage {
       const hit = this.hitTest(point.x, point.y, point.scale);
       if (!hit) {
         this.editor.select(null);
+        // 空白处拖动 = 自由平移画布（任意方向），拖动文字块则移动块。
+        this.pan = {
+          pointerId: event.pointerId,
+          startClientX: event.clientX,
+          startClientY: event.clientY,
+          scrollLeft: this.scroll.scrollLeft,
+          scrollTop: this.scroll.scrollTop,
+          moved: false,
+        };
+        overlay.setPointerCapture(event.pointerId);
+        overlay.classList.add('is-panning');
+        event.preventDefault();
         return;
       }
       const additive = event.shiftKey || event.metaKey || event.ctrlKey;
@@ -671,6 +691,14 @@ export class Stage {
     overlay.addEventListener('pointermove', (event) => {
       const state = this.editor.state;
       if (!state.meta) return;
+      if (this.pan && event.pointerId === this.pan.pointerId) {
+        const dx = event.clientX - this.pan.startClientX;
+        const dy = event.clientY - this.pan.startClientY;
+        if (!this.pan.moved && Math.abs(dx) + Math.abs(dy) > 2) this.pan.moved = true;
+        this.scroll.scrollLeft = this.pan.scrollLeft - dx;
+        this.scroll.scrollTop = this.pan.scrollTop - dy;
+        return;
+      }
       if (this.drag && event.pointerId === this.drag.pointerId) {
         const rect = overlay.getBoundingClientRect();
         if (rect.width <= 0) return;
@@ -715,6 +743,12 @@ export class Stage {
     });
 
     const endDrag = (event: PointerEvent): void => {
+      if (this.pan && event.pointerId === this.pan.pointerId) {
+        this.pan = null;
+        overlay.classList.remove('is-panning');
+        overlay.style.cursor = 'default';
+        return;
+      }
       if (!this.drag || event.pointerId !== this.drag.pointerId) return;
       const moved = this.drag.moved;
       const toggleOnClick = this.drag.toggleOnClick;

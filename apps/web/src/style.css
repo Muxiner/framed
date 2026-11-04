@@ -3402,3 +3402,7 @@ body.is-photo-dragging {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
+.canvas-overlay.is-panning {
+  cursor: grabbing;
+}
