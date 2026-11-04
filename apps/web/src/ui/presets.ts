@@ -349,7 +349,7 @@ export function decodePresetShare(input: string): DecodePresetShareResult {
     frame: parsed.frame,
     blocks: parsed.blocks,
     output: { format: 'png', quality: 92, maxDim: 0 },
-    grid: { columns: 12, rows: 12, snap: true, visible: false },
+    grid: { columns: 12, rows: 12, snap: false, visible: false },
   };
   const preset = normalizePreset({
     name: typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name.trim() : '分享的预设',

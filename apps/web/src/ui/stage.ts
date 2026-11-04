@@ -16,6 +16,8 @@ interface DragState {
   /** 拖拽开始时所有选中块的位置（保住相对关系）。 */
   startPositions: Map<string, { x: number; y: number }>;
   moved: boolean;
+  /** Shift 点击已选中块：若只是点击（未拖动）则取消该块选择。 */
+  toggleOnClick: boolean;
 }
 
 function roundRectPath(
@@ -145,7 +147,7 @@ export class Stage {
     this.snapButton = iconButton({
       name: 'magnet',
       label: '磁吸 1/12 栅格',
-      title: '磁吸 1/12 栅格（靠近才吸附；按住 Alt 自由拖动）',
+      title: '吸附开关（S）· 默认自由拖动，拖动时按住 Shift 临时磁吸',
       onClick: () => this.editor.toggleSnap(),
     });
     this.selectAllButton = iconButton({
@@ -252,7 +254,7 @@ export class Stage {
         ]),
         h('p', {
           class: 'empty-hints mono',
-          text: '拖拽多张 / 粘贴多图 / 导入照片 · G 网格 · S 吸附 · 方向键微调',
+          text: '拖拽多张 / 粘贴多图 / 导入照片 · 拖动自由移动 · Shift 磁吸 · G 网格 · 方向键微调',
         }),
       ]),
     ]);
@@ -628,9 +630,14 @@ export class Stage {
         return;
       }
       const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+      let toggleOnClick = false;
       if (additive) {
-        this.editor.select(hit, { additive: true });
-        if (!this.editor.state.selectedIds.includes(hit)) return;
+        if (this.editor.state.selectedIds.includes(hit)) {
+          // Shift 点已选中块：先允许拖动（Shift 拖动=磁吸），松手未移动才取消选择。
+          toggleOnClick = true;
+        } else {
+          this.editor.select(hit, { additive: true });
+        }
       } else if (!this.editor.state.selectedIds.includes(hit)) {
         this.editor.select(hit);
       }
@@ -654,6 +661,7 @@ export class Stage {
         anchorY: primary.y,
         startPositions,
         moved: false,
+        toggleOnClick,
       };
       overlay.setPointerCapture(event.pointerId);
       overlay.classList.add('is-dragging');
@@ -675,7 +683,9 @@ export class Stage {
         let deltaX = dx;
         let deltaY = dy;
         const grid = state.config?.grid;
-        if (grid?.snap && !event.altKey) {
+        // 默认自由拖动；按住 Shift 临时磁吸；打开吸附开关（S）则持续磁吸。
+        const snapActive = !event.altKey && (event.shiftKey || grid?.snap === true);
+        if (snapActive) {
           // 磁吸：靠近 1/12 栅格线才吸附，其余时间自由跟随鼠标（任意方向）。
           const rawX = this.drag.anchorX + dx;
           const rawY = this.drag.anchorY + dy;
@@ -707,8 +717,11 @@ export class Stage {
     const endDrag = (event: PointerEvent): void => {
       if (!this.drag || event.pointerId !== this.drag.pointerId) return;
       const moved = this.drag.moved;
+      const toggleOnClick = this.drag.toggleOnClick;
+      const dragId = this.drag.id;
       this.drag = null;
       if (moved) this.editor.endCoalescedEdit();
+      if (!moved && toggleOnClick) this.editor.select(dragId, { additive: true });
       overlay.classList.remove('is-dragging');
       overlay.style.cursor = 'default';
       this.drawOverlay();

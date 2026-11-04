@@ -189,7 +189,7 @@ pub struct GridConfig {
 
 impl Default for GridConfig {
     fn default() -> Self {
-        Self { columns: 12, rows: 12, snap: true, visible: false }
+        Self { columns: 12, rows: 12, snap: false, visible: false }
     }
 }
 

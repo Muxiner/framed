@@ -337,7 +337,7 @@ class MockEngine implements Engine {
       version: 1,
       frame: templateFrame(template, photo.width, photo.height),
       blocks: defaultBlocks(template, photo.exif),
-      grid: { columns: 12, rows: 12, snap: true, visible: false },
+      grid: { columns: 12, rows: 12, snap: false, visible: false },
       output: { format: 'png', quality: 92, maxDim: 0 },
     };
   }
