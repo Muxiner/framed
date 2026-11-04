@@ -10,6 +10,7 @@ import type {
   LogoBlock,
   OutputConfig,
   PhotoShadowConfig,
+  PhotoTransformConfig,
   RenderConfig,
   ShadowMode,
   TextAlign,
@@ -107,6 +108,20 @@ function normalizePhotoShadow(value: unknown): PhotoShadowConfig {
   };
 }
 
+function defaultPhotoTransform(): PhotoTransformConfig {
+  return { scale: 1, offsetX: 0, offsetY: 0 };
+}
+
+function normalizePhotoTransform(value: unknown): PhotoTransformConfig {
+  const fallback = defaultPhotoTransform();
+  if (!isRecord(value)) return fallback;
+  return {
+    scale: isNumber(value.scale) ? clamp(value.scale, 1, 4) : fallback.scale,
+    offsetX: isNumber(value.offsetX) ? clamp(value.offsetX, -1, 1) : fallback.offsetX,
+    offsetY: isNumber(value.offsetY) ? clamp(value.offsetY, -1, 1) : fallback.offsetY,
+  };
+}
+
 function normalizeFrame(value: unknown): FrameConfig | null {
   if (!isRecord(value)) return null;
   const template = value.template;
@@ -121,6 +136,7 @@ function normalizeFrame(value: unknown): FrameConfig | null {
     radius: clamp(value.radius, 0, 0.5),
     filmHoles: value.filmHoles,
     photoShadow: normalizePhotoShadow(value.photoShadow),
+    photoTransform: normalizePhotoTransform(value.photoTransform),
   };
 }
 

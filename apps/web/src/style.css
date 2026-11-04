@@ -3406,3 +3406,19 @@ body.is-photo-dragging {
 .canvas-overlay.is-panning {
   cursor: grabbing;
 }
+
+/* =========================================================================== 照片构图 */
+.photo-transform-block {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+.photo-transform-actions {
+  margin-top: 8px;
+}
+.stage.is-photo-drag .canvas-overlay {
+  cursor: grab;
+}
+.canvas-overlay.is-photo-moving {
+  cursor: grabbing;
+}

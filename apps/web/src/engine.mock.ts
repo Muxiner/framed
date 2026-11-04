@@ -13,6 +13,7 @@ import type {
   LogoBlock,
   PhotoInfo,
   PhotoShadowConfig,
+  PhotoTransformConfig,
   RenderConfig,
   RenderMeta,
   RenderResult,
@@ -56,14 +57,18 @@ function defaultPhotoShadow(): PhotoShadowConfig {
   };
 }
 
+function defaultPhotoTransform(): PhotoTransformConfig {
+  return { scale: 1, offsetX: 0, offsetY: 0 };
+}
+
 function templateFrame(template: FrameTemplate, photoW: number, photoH: number): FrameConfig {
   const short = Math.min(photoW, photoH);
   const presets: Record<FrameTemplate, FrameConfig> = {
-    white: { template, margin: 0.045, bottomRatio: 3.0, background: '#f6f3ee', radius: 0, filmHoles: true, photoShadow: defaultPhotoShadow() },
-    polaroid: { template, margin: 0.05, bottomRatio: 4.2, background: '#f7f4ee', radius: 0, filmHoles: true, photoShadow: defaultPhotoShadow() },
-    film: { template, margin: 0.04, bottomRatio: 1.9, background: '#0b0b0b', radius: 0, filmHoles: true, photoShadow: defaultPhotoShadow() },
-    black: { template, margin: 0.035, bottomRatio: 1, background: '#0a0a0a', radius: 0, filmHoles: false, photoShadow: defaultPhotoShadow() },
-    none: { template, margin: 0, bottomRatio: 1, background: '#000000', radius: 0, filmHoles: false, photoShadow: defaultPhotoShadow() },
+    white: { template, margin: 0.045, bottomRatio: 3.0, background: '#f6f3ee', radius: 0, filmHoles: true, photoShadow: defaultPhotoShadow(), photoTransform: defaultPhotoTransform() },
+    polaroid: { template, margin: 0.05, bottomRatio: 4.2, background: '#f7f4ee', radius: 0, filmHoles: true, photoShadow: defaultPhotoShadow(), photoTransform: defaultPhotoTransform() },
+    film: { template, margin: 0.04, bottomRatio: 1.9, background: '#0b0b0b', radius: 0, filmHoles: true, photoShadow: defaultPhotoShadow(), photoTransform: defaultPhotoTransform() },
+    black: { template, margin: 0.035, bottomRatio: 1, background: '#0a0a0a', radius: 0, filmHoles: false, photoShadow: defaultPhotoShadow(), photoTransform: defaultPhotoTransform() },
+    none: { template, margin: 0, bottomRatio: 1, background: '#000000', radius: 0, filmHoles: false, photoShadow: defaultPhotoShadow(), photoTransform: defaultPhotoTransform() },
   };
   void short;
   return presets[template];
@@ -414,7 +419,13 @@ class MockEngine implements Engine {
       roundRectPath(ctx, photoBox.x, photoBox.y, photoBox.w, photoBox.h, radius);
       ctx.clip();
     }
-    ctx.drawImage(image, photoBox.x, photoBox.y, photoBox.w, photoBox.h);
+    const transform = config.frame.photoTransform;
+    const photoScale = Math.max(1, Math.min(4, transform.scale ?? 1));
+    const sx = ((image.naturalWidth * (1 - 1 / photoScale)) / 2) * (Math.max(-1, Math.min(1, transform.offsetX ?? 0)) + 1);
+    const sy = ((image.naturalHeight * (1 - 1 / photoScale)) / 2) * (Math.max(-1, Math.min(1, transform.offsetY ?? 0)) + 1);
+    const sw = image.naturalWidth / photoScale;
+    const sh = image.naturalHeight / photoScale;
+    ctx.drawImage(image, sx, sy, sw, sh, photoBox.x, photoBox.y, photoBox.w, photoBox.h);
     if (shadow.enabled && shadow.mode !== 'outer') {
       const gradient = ctx.createRadialGradient(
         photoBox.x + photoBox.w / 2 + shadowX,

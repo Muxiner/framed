@@ -151,7 +151,16 @@ fn compose(photo: &RgbaImage, config: &RenderConfig) -> Result<RenderOutput> {
                 opacity,
             );
         }
-        imageops::draw_photo(&mut canvas, photo, geom.photo_x as i32, geom.photo_y as i32, radius);
+        imageops::draw_photo_transformed(
+            &mut canvas,
+            photo,
+            geom.photo_x as i32,
+            geom.photo_y as i32,
+            radius,
+            config.frame.photo_transform.scale,
+            config.frame.photo_transform.offset_x,
+            config.frame.photo_transform.offset_y,
+        );
         if inner {
             imageops::draw_inner_shadow(
                 &mut canvas,
@@ -169,7 +178,16 @@ fn compose(photo: &RgbaImage, config: &RenderConfig) -> Result<RenderOutput> {
             );
         }
     } else {
-        imageops::draw_photo(&mut canvas, photo, geom.photo_x as i32, geom.photo_y as i32, radius);
+        imageops::draw_photo_transformed(
+            &mut canvas,
+            photo,
+            geom.photo_x as i32,
+            geom.photo_y as i32,
+            radius,
+            config.frame.photo_transform.scale,
+            config.frame.photo_transform.offset_x,
+            config.frame.photo_transform.offset_y,
+        );
     }
 
     if config.frame.template == FrameTemplate::Film && config.frame.film_holes {
@@ -432,6 +450,20 @@ mod tests {
             assert_eq!(output.meta.height, baseline.meta.height);
             assert_ne!(output.bytes, baseline.bytes, "阴影模式 {mode:?} 应改变渲染结果");
         }
+    }
+
+    #[test]
+    fn photo_transform_changes_composition() {
+        let bytes = test_image(400, 300);
+        let baseline = render(&bytes, &RenderConfig::default()).unwrap();
+        let mut config = RenderConfig::default();
+        config.frame.photo_transform.scale = 1.4;
+        config.frame.photo_transform.offset_x = 0.6;
+        config.frame.photo_transform.offset_y = -0.4;
+        let output = render(&bytes, &config).unwrap();
+        assert_eq!(output.meta.width, baseline.meta.width);
+        assert_eq!(output.meta.height, baseline.meta.height);
+        assert_ne!(output.bytes, baseline.bytes, "照片构图变化应改变渲染结果");
     }
 
     #[test]

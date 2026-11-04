@@ -50,6 +50,7 @@ const PATHS: Record<string, string> = {
   share: `<circle cx="4.1" cy="8" r="1.7" ${STROKE}/><circle cx="11.9" cy="4" r="1.7" ${STROKE}/><circle cx="11.9" cy="12" r="1.7" ${STROKE}/><path d="m5.6 7.2 4.8-2.4M5.6 8.8l4.8 2.4" ${STROKE}/>`,
   link: `<path d="M6.4 9.6a3 3 0 0 1 0-4.2l1.5-1.5a3 3 0 0 1 4.2 4.2l-.9.9" ${STROKE}/><path d="M9.6 6.4a3 3 0 0 1 0 4.2l-1.5 1.5a3 3 0 0 1-4.2-4.2l.9-.9" ${STROKE}/>`,
   copy: `<rect x="5.4" y="5.4" width="8" height="8" rx="1.1" ${STROKE}/><path d="M3.4 10.6H2.6V2.6h8v.8" ${STROKE}/>`,
+  move: `<path d="M8 2.2v11.6M2.2 8h11.6" ${STROKE}/><path d="m5.4 4.8 2.6-2.6 2.6 2.6M5.4 11.2l2.6 2.6 2.6-2.6M4.8 5.4 2.2 8l2.6 2.6M11.2 5.4 13.8 8l-2.6 2.6" ${STROKE}/>`,
 };
 
 export type IconName = keyof typeof PATHS;

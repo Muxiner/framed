@@ -141,6 +141,24 @@ impl Default for PhotoShadowConfig {
     }
 }
 
+/// 照片在边框内的构图（缩放 + 平移）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PhotoTransformConfig {
+    /// 缩放倍数，1 = 铺满；>1 时可平移构图。
+    pub scale: f32,
+    /// 水平偏移 -1..1（-1 左边缘，0 居中，1 右边缘）。
+    pub offset_x: f32,
+    /// 垂直偏移 -1..1。
+    pub offset_y: f32,
+}
+
+impl Default for PhotoTransformConfig {
+    fn default() -> Self {
+        Self { scale: 1.0, offset_x: 0.0, offset_y: 0.0 }
+    }
+}
+
 /// 边框参数。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -155,6 +173,7 @@ pub struct FrameConfig {
     pub radius: f32,
     pub film_holes: bool,
     pub photo_shadow: PhotoShadowConfig,
+    pub photo_transform: PhotoTransformConfig,
 }
 
 impl Default for FrameConfig {
@@ -173,6 +192,7 @@ impl FrameConfig {
             radius: 0.0,
             film_holes: true,
             photo_shadow: PhotoShadowConfig::default(),
+            photo_transform: PhotoTransformConfig::default(),
         }
     }
 }

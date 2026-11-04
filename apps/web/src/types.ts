@@ -24,6 +24,15 @@ export interface PhotoShadowConfig {
   opacity: number;
 }
 
+export interface PhotoTransformConfig {
+  /** 1 = 铺满；>1 时可平移构图。 */
+  scale: number;
+  /** -1..1，-1 左边缘 / 0 居中 / 1 右边缘。 */
+  offsetX: number;
+  /** -1..1。 */
+  offsetY: number;
+}
+
 export interface FrameConfig {
   template: FrameTemplate;
   margin: number;
@@ -32,6 +41,7 @@ export interface FrameConfig {
   radius: number;
   filmHoles: boolean;
   photoShadow: PhotoShadowConfig;
+  photoTransform: PhotoTransformConfig;
 }
 
 export interface BlockBase {

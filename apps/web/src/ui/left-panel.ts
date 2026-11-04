@@ -120,6 +120,10 @@ export class LeftPanel {
   private holesRow!: HTMLElement;
   private paramSizeField!: SliderHandle;
   private paramColorField!: ColorHandle;
+  private photoScaleField!: SliderHandle;
+  private photoOffsetXField!: SliderHandle;
+  private photoOffsetYField!: SliderHandle;
+  private photoDragToggle!: ToggleHandle;
   private paramWeightField!: SegmentedHandle<'400' | '600' | '700'>;
   private brandToggle!: ToggleHandle;
   private brandWordColorField!: ColorHandle;
@@ -607,6 +611,56 @@ export class LeftPanel {
       onInput: (value) => this.scaleParameters(value),
     });
 
+    this.photoScaleField = sliderField({
+      label: '照片缩放',
+      min: 1,
+      max: 2.5,
+      step: 0.01,
+      value: 1,
+      format: (value) => `${value.toFixed(2)}×`,
+      ariaLabel: '照片缩放（构图）',
+      onInput: (value) => this.editor.setPhotoTransform({ scale: value }),
+    });
+    this.photoOffsetXField = sliderField({
+      label: '水平位置',
+      min: -1,
+      max: 1,
+      step: 0.01,
+      value: 0,
+      format: (value) => `${Math.round(value * 100)}%`,
+      ariaLabel: '照片水平位置',
+      onInput: (value) => this.editor.setPhotoTransform({ offsetX: value }),
+    });
+    this.photoOffsetYField = sliderField({
+      label: '垂直位置',
+      min: -1,
+      max: 1,
+      step: 0.01,
+      value: 0,
+      format: (value) => `${Math.round(value * 100)}%`,
+      ariaLabel: '照片垂直位置',
+      onInput: (value) => this.editor.setPhotoTransform({ offsetY: value }),
+    });
+    this.photoDragToggle = toggleField({
+      label: '拖动照片',
+      checked: false,
+      hint: '开启后在画布上拖动可平移照片；P 键切换',
+      onChange: () => this.editor.togglePhotoDrag(),
+    });
+    const resetPhotoButton = textButton('重置构图', {
+      icon: 'refresh',
+      className: 'btn-small btn-ghost',
+      onClick: () => this.editor.resetPhotoTransform(),
+    });
+    const photoTransformBlock = h('div', { class: 'photo-transform-block' }, [
+      h('p', { class: 'sec-mini-label mono', text: '照片构图' }),
+      this.photoScaleField.root,
+      this.photoOffsetXField.root,
+      this.photoOffsetYField.root,
+      this.photoDragToggle.root,
+      h('div', { class: 'row-actions photo-transform-actions' }, [resetPhotoButton]),
+    ]);
+
     this.paramColorField = colorField({
       label: '参数颜色',
       value: '#5f5a52',
@@ -849,6 +903,7 @@ export class LeftPanel {
         this.bottomField.root,
         this.backgroundField.root,
         this.radiusField.root,
+        photoTransformBlock,
         this.paramSizeField.root,
         h('p', { class: 'sec-mini-label mono', text: '颜色主题' }),
         themeRow,
@@ -1326,6 +1381,16 @@ export class LeftPanel {
       entry.card.disabled = !hasFrame;
       toggleClass(entry.card, 'is-active', state.activeStyleId === entry.id);
     }
+    if (frame) {
+      this.photoScaleField.setValue(frame.photoTransform.scale);
+      this.photoOffsetXField.setValue(frame.photoTransform.offsetX);
+      this.photoOffsetYField.setValue(frame.photoTransform.offsetY);
+    }
+    this.photoScaleField.setDisabled(!hasFrame);
+    this.photoOffsetXField.setDisabled(!hasFrame);
+    this.photoOffsetYField.setDisabled(!hasFrame);
+    this.photoDragToggle.setDisabled(!hasFrame);
+    this.photoDragToggle.setValue(state.photoDragMode);
     const cameraBlock = config?.blocks.find(
       (block) => block.id === 'camera' && block.type === 'text',
     );

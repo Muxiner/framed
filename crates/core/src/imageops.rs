@@ -76,6 +76,43 @@ pub fn draw_photo(canvas: &mut RgbaImage, photo: &RgbaImage, x: i32, y: i32, rad
     }
 }
 
+/// 按缩放/偏移构图绘制照片：裁剪源图后缩放回照片区域，圆角由现有绘制处理。
+#[allow(clippy::too_many_arguments)]
+pub fn draw_photo_transformed(
+    canvas: &mut RgbaImage,
+    photo: &RgbaImage,
+    x: i32,
+    y: i32,
+    radius: f32,
+    scale: f32,
+    offset_x: f32,
+    offset_y: f32,
+) {
+    let s = scale.clamp(1.0, 4.0);
+    let ox = offset_x.clamp(-1.0, 1.0);
+    let oy = offset_y.clamp(-1.0, 1.0);
+    if s <= 1.0001 && ox.abs() < 0.0001 && oy.abs() < 0.0001 {
+        draw_photo(canvas, photo, x, y, radius);
+        return;
+    }
+    let src_w = (photo.width() as f32 / s).max(1.0);
+    let src_h = (photo.height() as f32 / s).max(1.0);
+    let max_x = (photo.width() as f32 - src_w).max(0.0);
+    let max_y = (photo.height() as f32 - src_h).max(0.0);
+    let src_x = ((max_x * (ox + 1.0)) / 2.0).round() as u32;
+    let src_y = ((max_y * (oy + 1.0)) / 2.0).round() as u32;
+    let src_w = src_w.round().max(1.0).min((photo.width() - src_x).max(1) as f32) as u32;
+    let src_h = src_h.round().max(1.0).min((photo.height() - src_y).max(1) as f32) as u32;
+    let crop = image::imageops::crop_imm(photo, src_x, src_y, src_w, src_h).to_image();
+    let resized = image::imageops::resize(
+        &crop,
+        photo.width(),
+        photo.height(),
+        image::imageops::FilterType::Lanczos3,
+    );
+    draw_photo(canvas, &resized, x, y, radius);
+}
+
 /// 填充圆角矩形（胶片齿孔、小装饰）。
 pub fn fill_rounded_rect(
     canvas: &mut RgbaImage,

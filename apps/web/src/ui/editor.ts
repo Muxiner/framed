@@ -10,6 +10,7 @@ import type {
   LogoBlock,
   OutputConfig,
   PhotoInfo,
+  PhotoTransformConfig,
   RenderConfig,
   RenderMeta,
   TextBlock,
@@ -159,6 +160,8 @@ export interface EditorState {
   selectedIds: string[];
   /** 最近套用的品牌样式 id（用于高亮卡片；手动改参数后清空）。 */
   activeStyleId: string | null;
+  /** 拖动照片构图模式（UI 状态，不进历史）。 */
+  photoDragMode: boolean;
   bitmap: ImageBitmap | null;
   meta: RenderMeta | null;
   rendering: boolean;
@@ -201,6 +204,7 @@ function initialState(): EditorState {
     selectedId: null,
     selectedIds: [],
     activeStyleId: null,
+    photoDragMode: false,
     bitmap: null,
     meta: null,
     rendering: false,
@@ -936,6 +940,7 @@ export class Editor {
         selectedId: null,
     selectedIds: [],
     activeStyleId: null,
+    photoDragMode: false,
         meta: null,
         bitmap: null,
         status: 'ready',
@@ -1046,6 +1051,7 @@ export class Editor {
       selectedId: null,
     selectedIds: [],
     activeStyleId: null,
+    photoDragMode: false,
       bitmap: null,
       meta: null,
       status: 'empty',
@@ -1215,7 +1221,11 @@ export class Editor {
         preserveOutput: true,
       });
       // 切换模板不应丢掉用户调好的照片阴影。
-      config.frame = { ...config.frame, photoShadow: { ...previous.frame.photoShadow } };
+      config.frame = {
+        ...config.frame,
+        photoShadow: { ...previous.frame.photoShadow },
+        photoTransform: { ...previous.frame.photoTransform },
+      };
       this.beginEdit('template', 'manual');
       this.patch({ config });
       this.relayoutAppliedStyle();
@@ -1298,6 +1308,87 @@ export class Editor {
     const blocks = config.blocks.map((item) => (item.id === id ? next : item));
     this.patch({ config: { ...config, blocks } });
     this.scheduleRender();
+  }
+
+  /** 照片构图：缩放 + 偏移。 */
+  setPhotoTransform(patch: Partial<PhotoTransformConfig>): void {
+    const config = this.state.config;
+    if (!config) return;
+    const current = config.frame.photoTransform;
+    const next = { ...current, ...patch };
+    if (
+      Math.abs(next.scale - current.scale) < 0.0001 &&
+      Math.abs(next.offsetX - current.offsetX) < 0.0001 &&
+      Math.abs(next.offsetY - current.offsetY) < 0.0001
+    ) {
+      return;
+    }
+    this.beginEdit('photo:transform', 'idle', 500);
+    this.patch({ config: { ...config, frame: { ...config.frame, photoTransform: next } } });
+    this.scheduleRender();
+  }
+
+  resetPhotoTransform(): void {
+    const config = this.state.config;
+    if (!config) return;
+    this.beginEdit('photo:transform', 'manual');
+    this.patch({
+      config: {
+        ...config,
+        frame: {
+          ...config.frame,
+          photoTransform: { scale: 1, offsetX: 0, offsetY: 0 },
+        },
+      },
+    });
+    this.scheduleRender();
+    this.endCoalescedEdit();
+  }
+
+  togglePhotoDrag(): void {
+    this.patch({ photoDragMode: !this.state.photoDragMode });
+  }
+
+  /** 舞台开始拖动照片：一个连续历史步；scale=1 时自动放大一点以便平移。 */
+  beginPhotoDrag(): void {
+    const config = this.state.config;
+    if (!config) return;
+    this.endCoalescedEdit();
+    if (config.frame.photoTransform.scale <= 1.0001) {
+      this.patch({
+        config: {
+          ...config,
+          frame: {
+            ...config.frame,
+            photoTransform: { ...config.frame.photoTransform, scale: 1.35 },
+          },
+        },
+      });
+    }
+    this.beginEdit('photo:transform', 'manual');
+  }
+
+  dragPhotoTo(offsetX: number, offsetY: number): void {
+    const config = this.state.config;
+    if (!config) return;
+    const current = config.frame.photoTransform;
+    const x = Math.min(1, Math.max(-1, offsetX));
+    const y = Math.min(1, Math.max(-1, offsetY));
+    if (Math.abs(current.offsetX - x) < 0.0001 && Math.abs(current.offsetY - y) < 0.0001) {
+      return;
+    }
+    this.beginEdit('photo:transform', 'manual');
+    this.patch({
+      config: {
+        ...config,
+        frame: { ...config.frame, photoTransform: { ...current, offsetX: x, offsetY: y } },
+      },
+    });
+    this.scheduleRender();
+  }
+
+  endPhotoDrag(): void {
+    this.endCoalescedEdit();
   }
 
   /** 颜色主题：参数色 + 品牌字标色 + 边框底色 一次设置。 */

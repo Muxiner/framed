@@ -246,6 +246,7 @@ export class Inspector {
           h('li', {}, [h('kbd', { text: 'F' }), h('span', { text: '适应窗口' })]),
           h('li', {}, [h('kbd', { text: '方向键' }), h('span', { text: '微调位置' })]),
           h('li', {}, [h('kbd', { text: '空白拖动' }), h('span', { text: '平移画布' })]),
+          h('li', {}, [h('kbd', { text: 'P' }), h('span', { text: '拖动照片构图' })]),
           h('li', {}, [h('kbd', { text: 'Esc' }), h('span', { text: '取消选中' })]),
         ]),
       ]),

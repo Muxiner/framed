@@ -59,9 +59,20 @@ export class Stage {
   private readonly gridButton: HTMLButtonElement;
   private readonly snapButton: HTMLButtonElement;
   private readonly selectAllButton: HTMLButtonElement;
+  private readonly photoDragButton: HTMLButtonElement;
   private readonly previewCtx: CanvasRenderingContext2D;
 
   private drag: DragState | null = null;
+  private photoDrag: {
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startOffsetX: number;
+    startOffsetY: number;
+    scale: number;
+    photoCssWidth: number;
+    photoCssHeight: number;
+  } | null = null;
   private pan: {
     pointerId: number;
     startClientX: number;
@@ -164,6 +175,12 @@ export class Stage {
       title: '全选文字块 (⌘/Ctrl+A)',
       onClick: () => this.editor.selectAllText(),
     });
+    this.photoDragButton = iconButton({
+      name: 'move',
+      label: '拖动照片构图',
+      title: '拖动照片构图 (P)：在画布上拖动平移照片，滑杆/界面可缩放',
+      onClick: () => this.editor.togglePhotoDrag(),
+    });
     this.toolbar = h('div', { class: 'stage-toolbar', role: 'toolbar', ariaLabel: '画布工具' }, [
       this.fitButton,
       h('span', { class: 'tool-divider' }),
@@ -172,6 +189,7 @@ export class Stage {
       zoomIn,
       h('span', { class: 'tool-divider' }),
       this.selectAllButton,
+      this.photoDragButton,
       this.gridButton,
       this.snapButton,
     ]);
@@ -373,6 +391,10 @@ export class Stage {
       if (button === this.gridButton || button === this.snapButton) continue;
       button.disabled = !meta;
     }
+    toggleClass(this.root, 'is-photo-drag', state.photoDragMode);
+    this.photoDragButton.disabled = !hasConfig;
+    toggleClass(this.photoDragButton, 'is-active', state.photoDragMode);
+    this.photoDragButton.setAttribute('aria-pressed', String(state.photoDragMode));
     const gridOn = state.config?.grid.visible ?? false;
     const snapOn = state.config?.grid.snap ?? false;
     setAttr(this.gridButton, 'aria-pressed', String(gridOn));
@@ -632,6 +654,36 @@ export class Stage {
       const point = this.imagePoint(event);
       if (!point) return;
       overlay.focus({ preventScroll: true });
+      if (this.editor.state.photoDragMode && state.photo && state.meta && state.config) {
+        const photo = state.photo;
+        const frame = state.config.frame;
+        const short = Math.min(photo.width, photo.height);
+        const margin = frame.margin * short;
+        const bottom = frame.template === 'none' ? 0 : margin * frame.bottomRatio;
+        const canvasW = photo.width + margin * 2;
+        const canvasH = photo.height + margin + bottom;
+        const rect = overlay.getBoundingClientRect();
+        this.editor.beginPhotoDrag();
+        const transform = this.editor.state.config?.frame.photoTransform ?? {
+          scale: 1,
+          offsetX: 0,
+          offsetY: 0,
+        };
+        this.photoDrag = {
+          pointerId: event.pointerId,
+          startClientX: event.clientX,
+          startClientY: event.clientY,
+          startOffsetX: transform.offsetX,
+          startOffsetY: transform.offsetY,
+          scale: Math.max(1.0001, transform.scale),
+          photoCssWidth: (photo.width / canvasW) * rect.width,
+          photoCssHeight: (photo.height / canvasH) * rect.height,
+        };
+        overlay.setPointerCapture(event.pointerId);
+        overlay.classList.add('is-photo-moving');
+        event.preventDefault();
+        return;
+      }
       const hit = this.hitTest(point.x, point.y, point.scale);
       if (!hit) {
         this.editor.select(null);
@@ -691,6 +743,14 @@ export class Stage {
     overlay.addEventListener('pointermove', (event) => {
       const state = this.editor.state;
       if (!state.meta) return;
+      if (this.photoDrag && event.pointerId === this.photoDrag.pointerId) {
+        const drag = this.photoDrag;
+        const factor = 2 / Math.max(0.001, drag.scale - 1);
+        const dx = (event.clientX - drag.startClientX) / Math.max(1, drag.photoCssWidth);
+        const dy = (event.clientY - drag.startClientY) / Math.max(1, drag.photoCssHeight);
+        this.editor.dragPhotoTo(drag.startOffsetX - dx * factor, drag.startOffsetY - dy * factor);
+        return;
+      }
       if (this.pan && event.pointerId === this.pan.pointerId) {
         const dx = event.clientX - this.pan.startClientX;
         const dy = event.clientY - this.pan.startClientY;
@@ -732,6 +792,7 @@ export class Stage {
         this.editor.moveBlocksTo(positions);
         return;
       }
+      if (this.editor.state.photoDragMode) return;
       const point = this.imagePoint(event);
       if (!point) return;
       const hit = this.hitTest(point.x, point.y, point.scale);
@@ -743,6 +804,14 @@ export class Stage {
     });
 
     const endDrag = (event: PointerEvent): void => {
+      if (this.photoDrag && event.pointerId === this.photoDrag.pointerId) {
+        const drag = this.photoDrag;
+        const factor = 2 / Math.max(0.001, drag.scale - 1);
+        const dx = (event.clientX - drag.startClientX) / Math.max(1, drag.photoCssWidth);
+        const dy = (event.clientY - drag.startClientY) / Math.max(1, drag.photoCssHeight);
+        this.editor.dragPhotoTo(drag.startOffsetX - dx * factor, drag.startOffsetY - dy * factor);
+        return;
+      }
       if (this.pan && event.pointerId === this.pan.pointerId) {
         this.pan = null;
         overlay.classList.remove('is-panning');

@@ -109,6 +109,11 @@ window.addEventListener('keydown', (event) => {
       editor.toggleSnap();
       break;
     }
+    case 'p':
+    case 'P': {
+      editor.togglePhotoDrag();
+      break;
+    }
     case 'f':
     case 'F': {
       editor.setZoom('fit');
