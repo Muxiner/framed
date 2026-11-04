@@ -3112,3 +3112,39 @@ body.is-photo-dragging {
   user-select: none;
   -webkit-user-select: none;
 }
+
+/* =========================================================================== 预设 · 分享码 */
+.preset-share-btn {
+  color: var(--muted-2);
+  opacity: 0.72;
+  transition: color 0.14s, background 0.14s, opacity 0.14s;
+}
+.preset-item:hover .preset-share-btn,
+.preset-share-btn:focus-visible {
+  opacity: 1;
+  color: var(--text);
+}
+.preset-share-btn:hover {
+  color: var(--accent);
+  background: rgba(229, 181, 103, 0.08);
+}
+.preset-share-dialog {
+  width: min(460px, 100%);
+}
+.preset-share-code {
+  height: auto;
+  min-height: 92px;
+  padding: 8px 10px;
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace;
+  font-size: 9px;
+  line-height: 1.65;
+  letter-spacing: 0.01em;
+  resize: vertical;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  color: var(--muted);
+  background: #0f0e0c;
+}
+.preset-share-code:focus {
+  color: var(--text);
+}

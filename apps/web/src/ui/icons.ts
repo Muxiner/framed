@@ -47,6 +47,9 @@ const PATHS: Record<string, string> = {
   frame: `<rect x="2.2" y="2.2" width="11.6" height="11.6" rx="1.4" ${STROKE}/><rect x="5.1" y="5.1" width="5.8" height="5.8" rx=".7" ${STROKE}/>`,
   aperture: `<circle cx="8" cy="8" r="5.7" ${STROKE}/><path d="m8 2.3 2.9 5M13.7 8h-5.8M11.6 12.6 8.7 8M8 13.7l-2.9-5M2.3 8h5.8M4.4 3.4l2.9 5" ${STROKE}/>`,
   sparkle: `<path d="M8 2v4M8 10v4M2 8h4M10 8h4M4.2 4.2l1.7 1.7M10.1 10.1l1.7 1.7M11.8 4.2l-1.7 1.7M5.9 10.1l-1.7 1.7" ${STROKE}/>`,
+  share: `<circle cx="4.1" cy="8" r="1.7" ${STROKE}/><circle cx="11.9" cy="4" r="1.7" ${STROKE}/><circle cx="11.9" cy="12" r="1.7" ${STROKE}/><path d="m5.6 7.2 4.8-2.4M5.6 8.8l4.8 2.4" ${STROKE}/>`,
+  link: `<path d="M6.4 9.6a3 3 0 0 1 0-4.2l1.5-1.5a3 3 0 0 1 4.2 4.2l-.9.9" ${STROKE}/><path d="M9.6 6.4a3 3 0 0 1 0 4.2l-1.5 1.5a3 3 0 0 1-4.2-4.2l.9-.9" ${STROKE}/>`,
+  copy: `<rect x="5.4" y="5.4" width="8" height="8" rx="1.1" ${STROKE}/><path d="M3.4 10.6H2.6V2.6h8v.8" ${STROKE}/>`,
 };
 
 export type IconName = keyof typeof PATHS;

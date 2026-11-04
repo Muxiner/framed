@@ -18,6 +18,8 @@ export const PRESET_STORAGE_KEY = 'framed.presets.v1';
 export const PRESET_NAME_MAX = 30;
 export const PRESET_LIMIT = 30;
 export const PRESET_LOGO_LIMIT = 2 * 1024 * 1024;
+export const PRESET_SHARE_PREFIX = 'FRAMED1:';
+export const PRESET_SHARE_LIMIT = 32 * 1024;
 const PRESET_VERSION = 1;
 
 export interface Preset {
@@ -234,6 +236,96 @@ export function presetFileName(date = new Date()): string {
   return `framed-presets-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}.json`;
 }
 
+export type PresetShareResult = { ok: true; code: string } | { ok: false; error: string };
+
+function base64UrlEncode(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlDecode(input: string): Uint8Array | null {
+  const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+  try {
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+/** 生成可复制的分享码（不含 output/grid；含 Logo 时引导用 JSON 导出）。 */
+export function encodePresetShare(preset: Preset): PresetShareResult {
+  if (preset.config.blocks.some((block) => block.type === 'logo')) {
+    return { ok: false, error: '包含 Logo 的预设请用「导出 JSON」分享' };
+  }
+  const payload = {
+    v: 1,
+    name: preset.name,
+    frame: preset.config.frame,
+    blocks: preset.config.blocks,
+  };
+  let bytes: Uint8Array;
+  try {
+    bytes = new TextEncoder().encode(JSON.stringify(payload));
+  } catch {
+    return { ok: false, error: '预设无法序列化' };
+  }
+  const code = `${PRESET_SHARE_PREFIX}${base64UrlEncode(bytes)}`;
+  if (code.length > PRESET_SHARE_LIMIT) {
+    return { ok: false, error: '分享码过长，请改用「导出 JSON」' };
+  }
+  return { ok: true, code };
+}
+
+export type DecodePresetShareResult = { ok: true; preset: Preset } | { ok: false; error: string };
+
+/** 解析分享码，兼容前缀缺失、空白、标准/URL-safe base64。 */
+export function decodePresetShare(input: string): DecodePresetShareResult {
+  const text = input.trim();
+  if (!text) return { ok: false, error: '请粘贴分享码' };
+  if (text.length > PRESET_SHARE_LIMIT) return { ok: false, error: '分享码过长' };
+  let payload = text;
+  if (payload.toUpperCase().startsWith(PRESET_SHARE_PREFIX.toUpperCase())) {
+    payload = payload.slice(PRESET_SHARE_PREFIX.length);
+  }
+  payload = payload.replace(/\s+/g, '');
+  if (!payload) return { ok: false, error: '分享码内容为空' };
+  if (!/^[A-Za-z0-9+/=_-]+$/.test(payload)) return { ok: false, error: '分享码格式无效' };
+
+  const bytes = base64UrlDecode(payload);
+  if (!bytes) return { ok: false, error: '分享码解码失败' };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return { ok: false, error: '分享码内容不是有效 JSON' };
+  }
+  if (!isRecord(parsed) || parsed.v !== 1) return { ok: false, error: '分享码版本不支持' };
+  const rawConfig = {
+    version: 1,
+    frame: parsed.frame,
+    blocks: parsed.blocks,
+    output: { format: 'png', quality: 92, maxDim: 0 },
+    grid: { columns: 12, rows: 12, snap: true, visible: false },
+  };
+  const preset = normalizePreset({
+    name: typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name.trim() : '分享的预设',
+    config: rawConfig,
+  });
+  if (!preset) return { ok: false, error: '分享码结构无效' };
+  if (presetSizeBytes(preset) > PRESET_LOGO_LIMIT) {
+    return { ok: false, error: '分享码里的预设超过 2MB，无法导入' };
+  }
+  return { ok: true, preset };
+}
+
 export class PresetStore {
   private presets: Preset[] = [];
 
@@ -295,6 +387,37 @@ export class PresetStore {
       return null;
     }
     return removed;
+  }
+
+  shareCode(preset: Preset): PresetShareResult {
+    return encodePresetShare(preset);
+  }
+
+  importShare(code: string): { ok: true; preset: Preset; renamed: boolean } | { ok: false; error: string } {
+    if (this.presets.length >= PRESET_LIMIT) {
+      return { ok: false, error: `最多保存 ${PRESET_LIMIT} 个预设，请先删除旧的` };
+    }
+    const decoded = decodePresetShare(code);
+    if (!decoded.ok) return decoded;
+    const previous = this.presets.slice();
+    const nameInfo = uniquePresetName(
+      decoded.preset.name,
+      this.presets.map((preset) => preset.name),
+    );
+    const preset: Preset = {
+      ...decoded.preset,
+      id: nextPresetId(),
+      name: nameInfo.name,
+    };
+    if (presetSizeBytes(preset) > PRESET_LOGO_LIMIT) {
+      return { ok: false, error: '分享码里的预设超过 2MB，无法导入' };
+    }
+    this.presets.push(preset);
+    if (!this.persist()) {
+      this.presets = previous;
+      return { ok: false, error: '浏览器本地存储已满，导入失败' };
+    }
+    return { ok: true, preset, renamed: nameInfo.renamed };
   }
 
   exportJson(): string {

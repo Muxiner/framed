@@ -40,6 +40,15 @@ export class PresetDialog {
   private readonly nameError: HTMLElement;
   private readonly nameSaveButton: HTMLButtonElement;
 
+  private readonly shareImportButton: HTMLButtonElement;
+  private readonly shareLayer: HTMLElement;
+  private readonly shareCodeTextarea: HTMLTextAreaElement;
+  private readonly shareCopyButton: HTMLButtonElement;
+  private readonly importShareLayer: HTMLElement;
+  private readonly importShareInput: HTMLTextAreaElement;
+  private readonly importShareError: HTMLElement;
+  private readonly importShareConfirm: HTMLButtonElement;
+
   private lastFocus: HTMLElement | null = null;
   private confirmingId: string | null = null;
   private confirmTimer = 0;
@@ -83,9 +92,16 @@ export class PresetDialog {
       title: '导出全部预设为 JSON',
       onClick: () => this.exportPresets(),
     });
+    this.shareImportButton = textButton('导入分享码', {
+      icon: 'link',
+      className: 'btn-small',
+      title: '粘贴分享码导入预设',
+      onClick: () => this.openImportShare(),
+    });
     const toolbar = h('div', { class: 'preset-toolbar' }, [
       this.saveButton,
       h('span', { class: 'preset-toolbar-spacer' }),
+      this.shareImportButton,
       this.importButton,
       this.exportButton,
       this.importInput,
@@ -167,10 +183,95 @@ export class PresetDialog {
       ),
     ]);
 
+    // 分享码对话框（复制给别人）
+    this.shareCodeTextarea = h('textarea', {
+      class: 'input preset-share-code',
+      attrs: {
+        readonly: 'readonly',
+        spellcheck: 'false',
+        rows: '6',
+        'aria-label': '预设分享码',
+      },
+    });
+    this.shareCopyButton = textButton('复制分享码', {
+      icon: 'copy',
+      className: 'btn-accent',
+      onClick: () => void this.copyShareCode(),
+    });
+    const shareBackdrop = h('div', { class: 'preset-name-backdrop', ariaHidden: true });
+    shareBackdrop.addEventListener('click', () => this.closeShareDialog());
+    this.shareLayer = h('div', { class: 'preset-name-layer', hidden: true }, [
+      shareBackdrop,
+      h(
+        'section',
+        {
+          class: 'preset-name-dialog preset-share-dialog',
+          role: 'dialog',
+          attrs: { 'aria-modal': 'true', 'aria-label': '分享预设' },
+        },
+        [
+          h('h3', { class: 'preset-name-title', text: '分享码' }),
+          h('p', {
+            class: 'preset-name-hint',
+            text: '复制下面这串代码发给朋友，在「预设 → 导入分享码」里粘贴即可。分享码不含输出格式与网格设置。',
+          }),
+          this.shareCodeTextarea,
+          h('div', { class: 'preset-name-actions' }, [
+            textButton('关闭', { onClick: () => this.closeShareDialog() }),
+            this.shareCopyButton,
+          ]),
+        ],
+      ),
+    ]);
+
+    // 导入分享码对话框
+    this.importShareInput = h('textarea', {
+      class: 'input preset-share-code',
+      attrs: {
+        spellcheck: 'false',
+        rows: '4',
+        placeholder: '粘贴 FRAMED1: 开头的分享码，或直接粘贴 base64 字符串',
+        'aria-label': '分享码',
+      },
+    });
+    this.importShareError = h('p', { class: 'preset-name-error', hidden: true });
+    this.importShareConfirm = textButton('导入', {
+      className: 'btn-accent',
+      onClick: () => this.commitImportShare(),
+    });
+    const importShareBackdrop = h('div', { class: 'preset-name-backdrop', ariaHidden: true });
+    importShareBackdrop.addEventListener('click', () => this.closeImportShare());
+    this.importShareLayer = h('div', { class: 'preset-name-layer', hidden: true }, [
+      importShareBackdrop,
+      h(
+        'section',
+        {
+          class: 'preset-name-dialog preset-share-dialog',
+          role: 'dialog',
+          attrs: { 'aria-modal': 'true', 'aria-label': '导入分享码' },
+        },
+        [
+          h('h3', { class: 'preset-name-title', text: '导入分享码' }),
+          h('p', {
+            class: 'preset-name-hint',
+            text: '粘贴朋友发来的分享码，导入后会加入预设列表（重名自动改名）。',
+          }),
+          this.importShareInput,
+          this.importShareError,
+          h('div', { class: 'preset-name-actions' }, [
+            textButton('取消', { onClick: () => this.closeImportShare() }),
+            this.importShareConfirm,
+          ]),
+        ],
+      ),
+    ]);
+
     this.layer = h('div', { class: 'preset-layer', hidden: true }, [
       backdrop,
       this.dialog,
       this.nameLayer,
+      this.shareLayer,
+      this.importShareLayer,
     ]);
     document.body.append(this.layer);
 
@@ -192,7 +293,9 @@ export class PresetDialog {
         if (event.key === 'Escape') {
           event.preventDefault();
           event.stopPropagation();
-          if (!this.nameLayer.hidden) this.closeNameDialog();
+          if (!this.importShareLayer.hidden) this.closeImportShare();
+          else if (!this.shareLayer.hidden) this.closeShareDialog();
+          else if (!this.nameLayer.hidden) this.closeNameDialog();
           else this.close();
           return;
         }
@@ -220,6 +323,8 @@ export class PresetDialog {
   close(): void {
     if (this.layer.hidden) return;
     this.closeNameDialog();
+    this.closeShareDialog();
+    this.closeImportShare();
     this.layer.hidden = true;
     document.body.classList.remove('modal-open');
     this.confirmingId = null;
@@ -271,6 +376,14 @@ export class PresetDialog {
       this.close();
     });
 
+    const share = iconButton({
+      name: 'share',
+      label: `生成分享码：${preset.name}`,
+      title: '生成分享码（复制给别人）',
+      className: 'preset-share-btn',
+      onClick: () => this.sharePreset(preset),
+    });
+
     const confirming = this.confirmingId === preset.id;
     const remove = h('button', {
       class: confirming ? 'preset-delete is-confirming' : 'preset-delete',
@@ -293,7 +406,7 @@ export class PresetDialog {
         h('div', { class: 'preset-name-row' }, [name, badge]),
         meta,
       ]),
-      h('div', { class: 'preset-actions' }, [apply, remove]),
+      h('div', { class: 'preset-actions' }, [share, apply, remove]),
     ]);
     return row;
   }
@@ -368,6 +481,92 @@ export class PresetDialog {
     toast(result.hasLogo ? `${base}（含 Logo，占用本地存储）` : base, 'success', 3200);
   }
 
+  private sharePreset(preset: Preset): void {
+    const result = this.store.shareCode(preset);
+    if (!result.ok) {
+      toast(result.error, 'error', 4200);
+      return;
+    }
+    this.shareCodeTextarea.value = result.code;
+    this.shareLayer.hidden = false;
+    window.requestAnimationFrame(() => {
+      this.shareCodeTextarea.focus({ preventScroll: true });
+      this.shareCodeTextarea.select();
+    });
+    void this.copyText(result.code).then((copied) => {
+      toast(
+        copied ? '分享码已复制到剪贴板' : '请手动复制分享码',
+        copied ? 'success' : 'info',
+        3200,
+      );
+    });
+  }
+
+  private closeShareDialog(): void {
+    if (this.shareLayer.hidden) return;
+    this.shareLayer.hidden = true;
+    if (!this.layer.hidden) this.shareImportButton.focus({ preventScroll: true });
+  }
+
+  private copyShareCode(): void {
+    void this.copyText(this.shareCodeTextarea.value).then((copied) => {
+      toast(copied ? '已复制分享码' : '复制失败，请手动选择复制', copied ? 'success' : 'error', 2800);
+    });
+  }
+
+  private async copyText(text: string): Promise<boolean> {
+    if (!text) return false;
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // 剪贴板 API 不可用时回退到 execCommand。
+    }
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.append(area);
+    area.select();
+    let copied = false;
+    try {
+      copied = document.execCommand('copy');
+    } catch {
+      copied = false;
+    } finally {
+      area.remove();
+    }
+    return copied;
+  }
+
+  private openImportShare(): void {
+    this.importShareInput.value = '';
+    this.importShareError.hidden = true;
+    this.importShareLayer.hidden = false;
+    window.requestAnimationFrame(() => this.importShareInput.focus({ preventScroll: true }));
+  }
+
+  private closeImportShare(): void {
+    if (this.importShareLayer.hidden) return;
+    this.importShareLayer.hidden = true;
+    if (!this.layer.hidden) this.shareImportButton.focus({ preventScroll: true });
+  }
+
+  private commitImportShare(): void {
+    const result = this.store.importShare(this.importShareInput.value);
+    if (!result.ok) {
+      this.importShareError.textContent = result.error;
+      this.importShareError.hidden = false;
+      return;
+    }
+    this.closeImportShare();
+    this.renderList();
+    const base = result.renamed
+      ? `已导入分享码预设「${result.preset.name}」（重名已自动改名）`
+      : `已导入分享码预设「${result.preset.name}」`;
+    toast(base, 'success', 3600);
+  }
+
   private exportPresets(): void {
     if (this.store.count === 0) {
       toast('暂无预设可导出', 'info', 2400);
@@ -422,7 +621,13 @@ export class PresetDialog {
   }
 
   private trapFocus(event: KeyboardEvent): void {
-    const root = this.nameLayer.hidden ? this.dialog : this.nameLayer;
+    const root = !this.importShareLayer.hidden
+      ? this.importShareLayer
+      : !this.shareLayer.hidden
+        ? this.shareLayer
+        : this.nameLayer.hidden
+          ? this.dialog
+          : this.nameLayer;
     const focusables = Array.from(
       root.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex="0"]'),
     ).filter((element) => element.offsetParent !== null);

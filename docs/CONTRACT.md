@@ -252,6 +252,7 @@ list_fonts() -> [String]                                            # 当前进�
 - 照片库：拖拽任意位置导入 1..N 张、文件多选、粘贴多图；左栏缩略图网格（当前高亮、hover 删除、点击切换、上限 16）；缩略图可拖拽排序（Pointer Events，鼠标/触摸，暖金插入线；`activePhotoId` 不变、不渲染、不进历史；「导出全部」顺序跟随库顺序），支持 Alt+←/→ 键盘移动；每张照片独立配置；切换 < 1s；导入进度与跳过提示。
 - 批量参数：默认「统一」（`sharedParams: true`）——任何 `frame` / `blocks` 编辑在 `patch` 时自动同步到照片库全部照片；但 `camera` / `gear` / `date` 三个文字块的**文本**按各照片 `exifTexts` 各自保留（编辑这三段只更新当前照片），其余样式/位置/水印/Logo/output/grid 全量同步。切「单独」后各照片独立，编辑只影响当前；「应用当前参数到全部」可一次性同步（文本按各图 EXIF 替换）。模式切换不进撤销栈并重置历史。
 - 预设：边框区「预设」入口，可把当前 `frame + blocks` 保存为命名预设（localStorage，上限 30），随时套用/删除/导出 JSON/导入 JSON；套用时 camera/gear/date 文本按当前照片 EXIF 替换，保留 output/grid 并走撤销历史。
+- 预设分享码：`FRAMED1:<base64url>`，payload 为紧凑 JSON `{v:1,name,frame,blocks}`（去掉 output/grid）；含 Logo 或超过 32KB 时提示改用 JSON 导出；导入容忍前缀、标准/URL-safe base64、空白。
 - 自定义字体：左栏字体区上传 ttf/otf（≤8MB），检查器字体下拉可选用；已上传字体在网页端持久化（IndexedDB），桌面端为当前进程内有效；移除字体时引用它的文本块自动回退到内置字体。
 - 批量导出：导出弹层支持「导出全部」，按当前模式构造配置——统一模式用 master 样式 + 各图 EXIF 文本，单独模式用各自 config；网页端逐张下载、桌面端选目录一次写入。
 - 交互：所有修改 < 100ms 内反映到预览（rAF 合并渲染请求）；渲染中显示轻微状态点；错误 toast；导出成功 toast。
@@ -310,3 +311,4 @@ cargo run -p framed-cli -- --help
 9. 预设：保存当前排版为预设后改乱参数 → 套用预设恢复 frame/blocks、camera 文本仍来自当前照片；刷新后预设仍在；导入/导出 JSON 可用。
 10. 自定义字体：上传 ttf → 指定到文字块后渲染不报错且 config.customFont 生效；移除字体后文本回退内置字体，页面不崩。
 11. 照片库排序：拖第 3 张到第 1 位 → `state.library` 顺序变化、activePhotoId 不变、「导出全部」顺序跟随；点击/小位移不误触、Esc 取消、Alt+←/→ 可移动。
+12. 预设分享码：生成 `FRAMED1:` 码 → 清空预设后粘贴导入可用、frame/blocks 一致（无 output/grid）；无前缀/URL-safe/含空白均能导入；非法码报错且不写入；含 Logo 的预设提示用 JSON 导出。
