@@ -144,8 +144,8 @@ export class Stage {
     });
     this.snapButton = iconButton({
       name: 'magnet',
-      label: '吸附 1/12 栅格',
-      title: '吸附 1/12 栅格 (S)',
+      label: '磁吸 1/12 栅格',
+      title: '磁吸 1/12 栅格（靠近才吸附；按住 Alt 自由拖动）',
       onClick: () => this.editor.toggleSnap(),
     });
     this.selectAllButton = iconButton({
@@ -676,10 +676,16 @@ export class Stage {
         let deltaY = dy;
         const grid = state.config?.grid;
         if (grid?.snap && !event.altKey) {
-          const snappedX = Math.round((this.drag.anchorX + dx) * 12) / 12;
-          const snappedY = Math.round((this.drag.anchorY + dy) * 12) / 12;
-          deltaX = snappedX - this.drag.anchorX;
-          deltaY = snappedY - this.drag.anchorY;
+          // 磁吸：靠近 1/12 栅格线才吸附，其余时间自由跟随鼠标（任意方向）。
+          const rawX = this.drag.anchorX + dx;
+          const rawY = this.drag.anchorY + dy;
+          const snappedX = Math.round(rawX * 12) / 12;
+          const snappedY = Math.round(rawY * 12) / 12;
+          const threshold = 0.008;
+          const targetX = Math.abs(rawX - snappedX) <= threshold ? snappedX : rawX;
+          const targetY = Math.abs(rawY - snappedY) <= threshold ? snappedY : rawY;
+          deltaX = targetX - this.drag.anchorX;
+          deltaY = targetY - this.drag.anchorY;
         }
         const positions = new Map<string, { x: number; y: number }>();
         for (const [id, start] of this.drag.startPositions) {

@@ -172,7 +172,7 @@ export class Inspector {
       onChange: (checked) => this.editor.setGrid({ visible: checked }),
     });
     const snap = toggleField({
-      label: '吸附 1/12 栅格',
+      label: '磁吸 1/12 栅格',
       checked: true,
       onChange: (checked) => this.editor.setGrid({ snap: checked }),
     });
