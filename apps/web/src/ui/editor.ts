@@ -1265,6 +1265,36 @@ export class Editor {
     this.scheduleRender();
   }
 
+  /** 单独调整品牌字标 / 副标的颜色与字号。 */
+  setBrandTextStyle(
+    target: 'wordmark' | 'tagline',
+    patch: { color?: string; size?: number },
+  ): void {
+    const config = this.state.config;
+    if (!config) return;
+    const id = target === 'wordmark' ? 'watermark' : 'tagline';
+    const block = config.blocks.find((item) => item.id === id);
+    if (!block || block.type !== 'text') return;
+    const next = { ...block } as typeof block;
+    let changed = false;
+    if (patch.color !== undefined && next.color !== patch.color) {
+      next.color = patch.color;
+      changed = true;
+    }
+    if (patch.size !== undefined) {
+      const size = Math.min(8, Math.max(0.1, patch.size));
+      if (Math.abs(next.size - size) > 0.0001) {
+        next.size = size;
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    this.beginEdit(`brand:${target}`, 'idle', 600);
+    const blocks = config.blocks.map((item) => (item.id === id ? next : item));
+    this.patch({ config: { ...config, blocks } });
+    this.scheduleRender();
+  }
+
   /** 显示/隐藏品牌字标与副标（保留参数排版）。 */
   setBrandVisible(visible: boolean): void {
     const config = this.state.config;

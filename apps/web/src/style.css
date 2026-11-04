@@ -3292,3 +3292,50 @@ body.is-photo-dragging {
     grid-column: 3;
   }
 }
+
+/* =========================================================================== 字标微调 / 参数色板 */
+.brand-text-adjust {
+  margin: 0 0 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: #121110;
+}
+.brand-text-adjust summary {
+  padding: 7px 9px;
+  color: var(--muted);
+  font-size: 9.5px;
+  cursor: pointer;
+  user-select: none;
+}
+.brand-text-adjust[open] summary {
+  border-bottom: 1px solid var(--line-soft);
+}
+.brand-text-adjust-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px;
+}
+.color-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: -2px 0 2px;
+}
+.color-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 50%;
+  background: var(--swatch, #000);
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+.color-swatch:hover {
+  transform: scale(1.08);
+}
+.color-swatch.is-active {
+  box-shadow: 0 0 0 2px var(--accent);
+  border-color: transparent;
+}

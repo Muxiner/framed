@@ -121,6 +121,24 @@ export class LeftPanel {
   private paramColorField!: ColorHandle;
   private paramWeightField!: SegmentedHandle<'400' | '600' | '700'>;
   private brandToggle!: ToggleHandle;
+  private brandWordColorField!: ColorHandle;
+  private brandWordSizeField!: SliderHandle;
+  private brandTagColorField!: ColorHandle;
+  private brandTagSizeField!: SliderHandle;
+  private brandTextDetails!: HTMLDetailsElement;
+  private paramSwatches = new Map<string, HTMLButtonElement>();
+  private readonly paramColors = [
+    '#ffffff',
+    '#efeae1',
+    '#9a9388',
+    '#5f5a52',
+    '#141414',
+    '#c8102e',
+    '#f47b20',
+    '#ffd100',
+    '#2ea36b',
+    '#2f6fed',
+  ] as const;
   private paramBaseSizes: Record<string, number> | null = null;
   private paramLastStyleId: string | null = null;
   private paramLastPhotoId: string | null = null;
@@ -590,6 +608,23 @@ export class LeftPanel {
       value: '#5f5a52',
       onChange: (value) => this.editor.setParameterStyle({ color: value }),
     });
+    const paramSwatches = h('div', {
+      class: 'color-swatches',
+      role: 'group',
+      ariaLabel: '参数颜色快捷选择',
+    });
+    for (const color of this.paramColors) {
+      const swatch = h('button', {
+        class: 'color-swatch',
+        title: `参数颜色 ${color}`,
+        ariaLabel: `参数颜色 ${color}`,
+        attrs: { type: 'button' },
+      });
+      swatch.style.setProperty('--swatch', color);
+      swatch.addEventListener('click', () => this.editor.setParameterStyle({ color }));
+      this.paramSwatches.set(color, swatch);
+      paramSwatches.append(swatch);
+    }
     this.paramWeightField = segmentedField<'400' | '600' | '700'>({
       label: '参数粗细',
       options: [
@@ -607,6 +642,46 @@ export class LeftPanel {
       hint: '关闭后隐藏品牌字标与副标，只保留参数排版',
       onChange: (checked) => this.editor.setBrandVisible(checked),
     });
+
+    this.brandWordColorField = colorField({
+      label: '字标颜色',
+      value: '#141414',
+      onChange: (value) => this.editor.setBrandTextStyle('wordmark', { color: value }),
+    });
+    this.brandWordSizeField = sliderField({
+      label: '字标大小',
+      min: 0.2,
+      max: 4,
+      step: 0.02,
+      value: 2.2,
+      format: (value) => `${value.toFixed(2)}×`,
+      ariaLabel: '品牌字标大小',
+      onInput: (value) => this.editor.setBrandTextStyle('wordmark', { size: value }),
+    });
+    this.brandTagColorField = colorField({
+      label: '副标颜色',
+      value: '#c8102e',
+      onChange: (value) => this.editor.setBrandTextStyle('tagline', { color: value }),
+    });
+    this.brandTagSizeField = sliderField({
+      label: '副标大小',
+      min: 0.2,
+      max: 3,
+      step: 0.02,
+      value: 0.6,
+      format: (value) => `${value.toFixed(2)}×`,
+      ariaLabel: '品牌副标大小',
+      onInput: (value) => this.editor.setBrandTextStyle('tagline', { size: value }),
+    });
+    this.brandTextDetails = h('details', { class: 'brand-text-adjust' }, [
+      h('summary', { text: '单独调整字标 / 副标' }),
+      h('div', { class: 'brand-text-adjust-body' }, [
+        this.brandWordColorField.root,
+        this.brandWordSizeField.root,
+        this.brandTagColorField.root,
+        this.brandTagSizeField.root,
+      ]),
+    ]);
 
     this.shadowToggle = toggleField({
       label: '照片阴影',
@@ -710,6 +785,7 @@ export class LeftPanel {
         h('p', { class: 'sec-mini-label mono', text: '品牌样式' }),
         brandStrip,
         this.brandToggle.root,
+        this.brandTextDetails,
         cards,
         this.marginField.root,
         this.bottomField.root,
@@ -717,6 +793,7 @@ export class LeftPanel {
         this.radiusField.root,
         this.paramSizeField.root,
         this.paramColorField.root,
+        paramSwatches,
         this.paramWeightField.root,
         this.holesRow,
         this.shadowBlock,
@@ -1203,8 +1280,28 @@ export class LeftPanel {
     );
     const hasBrandBlocks = config?.blocks.some((block) => block.id === 'tagline') ?? false;
     this.brandToggle.setDisabled(!hasBrandBlocks);
+    this.brandTextDetails.hidden = !hasBrandBlocks;
     if (watermarkVisible && watermarkVisible.type === 'text') {
       this.brandToggle.setValue(watermarkVisible.visible);
+      this.brandWordColorField.setValue(watermarkVisible.color);
+      this.brandWordSizeField.setValue(watermarkVisible.size);
+      this.brandWordColorField.setDisabled(!hasBrandBlocks);
+      this.brandWordSizeField.setDisabled(!hasBrandBlocks);
+    }
+    const taglineBlock = config?.blocks.find(
+      (block) => block.id === 'tagline' && block.type === 'text',
+    );
+    if (taglineBlock && taglineBlock.type === 'text') {
+      this.brandTagColorField.setValue(taglineBlock.color);
+      this.brandTagSizeField.setValue(taglineBlock.size);
+      this.brandTagColorField.setDisabled(false);
+      this.brandTagSizeField.setDisabled(false);
+    } else {
+      this.brandTagColorField.setDisabled(true);
+      this.brandTagSizeField.setDisabled(true);
+    }
+    for (const [color, swatch] of this.paramSwatches) {
+      toggleClass(swatch, 'is-active', cameraBlock?.type === 'text' && cameraBlock.color === color);
     }
     if (state.activeStyleId && state.activeStyleId !== this.paramLastStyleId) {
       this.paramBaseSizes = null;
