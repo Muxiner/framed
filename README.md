@@ -226,10 +226,10 @@ python3 scripts/make_samples.py     # 需要 Pillow + numpy
 - [x] 批量参数：默认统一 / 可切单独调整
 - [x] 自定义预设（保存 / 套用 / 导出导入 JSON）
 - [x] 自定义字体上传（ttf / otf，≤8MB）
+- [x] 照片库拖拽排序（鼠标 / 触摸长按，Alt+←/→ 键盘移动）
 - [x] Tauri v2 桌面版（原生渲染、系统保存对话框）
 - [x] 原生 CLI（批量渲染）
 - [ ] RAW（CR3/NEF/ARW）解码与缩略图
-- [ ] 照片库拖拽排序
 - [ ] 预设云端同步 / 分享
 - [ ] 移动端（iOS / Android）
 

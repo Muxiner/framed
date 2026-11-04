@@ -32,6 +32,7 @@ import {
 } from './fields';
 import { formatFontDate, formatFontSize, type CustomFontMeta } from './fonts';
 import { icon } from './icons';
+import { LibraryReorder } from './library-reorder';
 import { PresetDialog } from './preset-dialog';
 import { SAMPLES, sampleThumb, sampleUrl, type SampleId } from './samples';
 
@@ -98,6 +99,7 @@ export class LeftPanel {
   private libraryProgressText!: HTMLElement;
   private libraryEmpty!: HTMLElement;
   private libraryItems = new Map<string, LibraryItemHandle>();
+  private reorder!: LibraryReorder;
   private libraryIds = '';
   private libraryActive: string | null = null;
   private libraryImporting = false;
@@ -248,6 +250,12 @@ export class LeftPanel {
     });
 
     this.libraryGrid = h('div', { class: 'library-grid', role: 'list', ariaLabel: '照片库' });
+    this.reorder = new LibraryReorder(
+      this.libraryGrid,
+      () => this.editor.state.library.map((entry) => ({ id: entry.id, name: entry.name })),
+      (from, to) => this.editor.movePhoto(from, to),
+      (id) => this.focusLibraryItem(id),
+    );
     this.libraryCount = h('span', { class: 'library-count mono', text: '0 张' });
     this.libraryClear = h('button', {
       class: 'library-clear',
@@ -339,7 +347,10 @@ export class LeftPanel {
         h('span', { class: 'library-name', text: entry.name }),
       ],
     );
-    thumb.addEventListener('click', () => void this.editor.switchPhoto(entry.id));
+    thumb.addEventListener('click', () => {
+      if (this.reorder.consumeClickSuppress()) return;
+      void this.editor.switchPhoto(entry.id);
+    });
 
     const remove = h('button', {
       class: 'library-remove',
@@ -357,6 +368,7 @@ export class LeftPanel {
       thumb,
       remove,
     ]);
+    this.reorder.register(entry.id, root, thumb, entry.name);
     return { root, thumb, remove };
   }
 
@@ -402,6 +414,11 @@ export class LeftPanel {
       item.thumb.disabled = busy;
       item.remove.disabled = busy;
     }
+  }
+
+  private focusLibraryItem(id: string): void {
+    const item = this.libraryItems.get(id);
+    if (item) item.thumb.focus({ preventScroll: true });
   }
 
   private buildSampleChip(id: SampleId, label: string): HTMLElement {

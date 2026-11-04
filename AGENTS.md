@@ -65,7 +65,8 @@ cargo run -p framed-cli -- render photo.jpg -t film -o out.png
 10. **编辑器状态必须可撤销**：`apps/web` 里凡是改 `frame` / `blocks` 的操作都要走 `Editor` 的历史入口（`beginEdit` + `endCoalescedEdit`），并把连续操作合并成一步；选中、缩放、网格、抽屉、导出弹层等 UI 状态**不得**进历史。新增修改入口忘记接历史，撤销就会「跳过」这次改动。
 
 11. **用户字体**：文本块用 `customFont`（字体 id）引用，上传走 `engine.registerFont(id, bytes)`；字体解析/注册在 core（`register_user_font`），wasm/tauri 各自暴露入口。网页端持久化在 IndexedDB（`framed/fonts`），刷新后重新注册；删除字体要清空引用块。
-12. **预设**：localStorage `framed.presets.v1`（`{version, presets}`，上限 30）；套用走 `editor.applyPreset`，只覆盖 frame/blocks、保留 output/grid、camera/gear/date 按当前照片 `exifTexts` 替换、并进入撤销历史。
+12. **照片库排序是纯 UI 状态**：拖拽只调整 `library` 数组顺序，不改 `activePhotoId`、不触发渲染、不进撤销历史；「导出全部」按当前库顺序构造 items。
+13. **预设**：localStorage `framed.presets.v1`（`{version, presets}`，上限 30）；套用走 `editor.applyPreset`，只覆盖 frame/blocks、保留 output/grid、camera/gear/date 按当前照片 `exifTexts` 替换、并进入撤销历史。
 
 ## 视觉规范（UI）
 

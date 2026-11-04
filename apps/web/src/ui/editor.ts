@@ -907,6 +907,21 @@ export class Editor {
     }
   }
 
+  /** 仅调整照片库顺序：不改 activePhotoId、不触发渲染、不进撤销历史。 */
+  movePhoto(fromIndex: number, toIndex: number): void {
+    const length = this.state.library.length;
+    if (length < 2) return;
+    const from = Math.max(0, Math.min(length - 1, Math.trunc(fromIndex)));
+    const to = Math.max(0, Math.min(length - 1, Math.trunc(toIndex)));
+    if (from === to) return;
+    const library = [...this.state.library];
+    const [entry] = library.splice(from, 1);
+    if (!entry) return;
+    library.splice(to, 0, entry);
+    this.patch({ library });
+    toast('已调整照片顺序', 'info', 1500);
+  }
+
   async switchPhoto(id: string): Promise<void> {
     if (this.state.importing) {
       toast('正在导入照片，请稍候', 'info', 2000);
