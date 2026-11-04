@@ -12,6 +12,7 @@ import {
   type SliderHandle,
 } from './fields';
 import { brandMark, icon } from './icons';
+import { REDO_SHORTCUT, UNDO_SHORTCUT } from './platform';
 
 type MaxDimKey = '0' | '2400' | '1600';
 const TEMPLATE_ORDER: FrameTemplate[] = ['none', 'white', 'polaroid', 'film', 'black'];
@@ -31,6 +32,8 @@ export class Topbar {
   private readonly statusDot: HTMLElement;
   private readonly statusText: HTMLElement;
   private readonly engineBadge: HTMLElement;
+  private readonly undoButton: HTMLButtonElement;
+  private readonly redoButton: HTMLButtonElement;
   private readonly leftToggle: HTMLButtonElement;
   private readonly inspectorToggle: HTMLButtonElement;
   private readonly exportMain: HTMLButtonElement;
@@ -85,6 +88,28 @@ export class Topbar {
       title: '渲染内核',
     });
 
+    this.undoButton = iconButton({
+      name: 'undo',
+      label: `撤销（${UNDO_SHORTCUT}）`,
+      title: `撤销 (${UNDO_SHORTCUT})`,
+      className: 'history-btn',
+      onClick: () => editor.undo(),
+    });
+    this.redoButton = iconButton({
+      name: 'redo',
+      label: `重做（${REDO_SHORTCUT}）`,
+      title: `重做 (${REDO_SHORTCUT})`,
+      className: 'history-btn',
+      onClick: () => editor.redo(),
+    });
+    this.undoButton.setAttribute('aria-keyshortcuts', 'Meta+Z Control+Z');
+    this.redoButton.setAttribute('aria-keyshortcuts', 'Meta+Shift+Z Control+Shift+Z Control+Y');
+    const historyGroup = h(
+      'div',
+      { class: 'history-group', role: 'group', ariaLabel: '历史操作' },
+      [this.undoButton, this.redoButton],
+    );
+
     this.leftToggle = iconButton({
       name: 'sliders',
       label: '打开控制栏',
@@ -98,10 +123,15 @@ export class Topbar {
       onClick: () => editor.toggleInspector(),
     });
 
-    this.exportLabel = h('span', { text: '导出' });
+    this.exportLabel = h('span', { class: 'export-label', text: '导出' });
     this.exportMain = h(
       'button',
-      { class: 'btn btn-accent export-main', attrs: { type: 'button' } },
+      {
+        class: 'btn btn-accent export-main',
+        title: '导出图片',
+        ariaLabel: '导出图片',
+        attrs: { type: 'button' },
+      },
       [h('span', { class: 'export-ico', html: icon('download', 15) }), this.exportLabel],
     );
     this.exportMain.addEventListener('click', () => void editor.exportNow());
@@ -207,6 +237,7 @@ export class Topbar {
 
     this.root = h('header', { class: 'topbar' }, [
       brand,
+      historyGroup,
       h('div', { class: 'topbar-center' }, [nav]),
       right,
       this.popover,
@@ -261,6 +292,11 @@ export class Topbar {
     setText(this.engineBadge, state.engineLabel);
     this.engineBadge.dataset.kind = state.engineLabel.toLowerCase();
     this.engineBadge.title = this.statusWrap.title;
+
+    this.undoButton.disabled = !state.canUndo;
+    this.redoButton.disabled = !state.canRedo;
+    this.undoButton.setAttribute('aria-disabled', String(!state.canUndo));
+    this.redoButton.setAttribute('aria-disabled', String(!state.canRedo));
 
     toggleClass(this.leftToggle, 'is-active', state.leftOpen);
     this.leftToggle.setAttribute('aria-pressed', String(state.leftOpen));

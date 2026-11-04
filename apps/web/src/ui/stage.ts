@@ -14,6 +14,7 @@ interface DragState {
   anchorX: number;
   anchorY: number;
   moved: boolean;
+  historyStarted: boolean;
 }
 
 function roundRectPath(
@@ -588,6 +589,7 @@ export class Stage {
         anchorX: block.x,
         anchorY: block.y,
         moved: false,
+        historyStarted: false,
       };
       overlay.setPointerCapture(event.pointerId);
       overlay.classList.add('is-dragging');
@@ -602,7 +604,12 @@ export class Stage {
         if (rect.width <= 0) return;
         const dx = (event.clientX - this.drag.startClientX) / rect.width;
         const dy = (event.clientY - this.drag.startClientY) / rect.height;
-        if (Math.abs(dx) > 0.0005 || Math.abs(dy) > 0.0005) this.drag.moved = true;
+        if (!this.drag.moved) {
+          if (Math.abs(dx) <= 0.001 && Math.abs(dy) <= 0.001) return;
+          this.drag.moved = true;
+          this.drag.historyStarted = true;
+          this.editor.beginBlockDrag(this.drag.id);
+        }
         let x = this.drag.anchorX + dx;
         let y = this.drag.anchorY + dy;
         const grid = state.config?.grid;
@@ -625,7 +632,9 @@ export class Stage {
 
     const endDrag = (event: PointerEvent): void => {
       if (!this.drag || event.pointerId !== this.drag.pointerId) return;
+      const historyStarted = this.drag.historyStarted;
       this.drag = null;
+      if (historyStarted) this.editor.endBlockDrag();
       overlay.classList.remove('is-dragging');
       overlay.style.cursor = 'default';
       this.drawOverlay();

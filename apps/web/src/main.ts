@@ -54,15 +54,31 @@ const NUDGE_FINE = 1 / 144;
 const NUDGE_COARSE = 1 / 12;
 
 window.addEventListener('keydown', (event) => {
-  if (event.metaKey || event.ctrlKey) {
-    if (event.key.toLowerCase() === 'e') {
-      event.preventDefault();
-      void editor.exportNow();
-    }
+  const modifier = event.metaKey || event.ctrlKey;
+  const key = event.key.toLowerCase();
+  // 撤销 / 重做：输入框聚焦时也走应用级历史（先提交当前文字编辑再退一步）。
+  if (modifier && key === 'z') {
+    event.preventDefault();
+    if (event.shiftKey) editor.redo();
+    else editor.undo();
+    return;
+  }
+  if (event.ctrlKey && key === 'y') {
+    event.preventDefault();
+    editor.redo();
+    return;
+  }
+  if (modifier && key === 'e') {
+    event.preventDefault();
+    void editor.exportNow();
     return;
   }
   if (isTextInput(event.target)) {
-    if (event.key === 'Escape' && event.target instanceof HTMLElement) event.target.blur();
+    if (event.key === 'Enter') editor.endCoalescedEdit();
+    if (event.key === 'Escape' && event.target instanceof HTMLElement) {
+      editor.endCoalescedEdit();
+      event.target.blur();
+    }
     return;
   }
   switch (event.key) {
@@ -107,6 +123,29 @@ window.addEventListener('keydown', (event) => {
       break;
   }
 });
+
+// 连续编辑收束：滑杆/取色器释放、文本失焦时立即落一个历史步
+document.addEventListener(
+  'change',
+  (event) => {
+    const target = event.target;
+    if (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement
+    ) {
+      editor.endCoalescedEdit();
+    }
+  },
+  true,
+);
+window.addEventListener(
+  'focusout',
+  (event) => {
+    if (isTextInput(event.target)) editor.endCoalescedEdit();
+  },
+  true,
+);
 
 // --------------------------------------------------------------------------- 拖拽 / 粘贴照片
 

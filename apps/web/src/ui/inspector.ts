@@ -36,6 +36,7 @@ import {
   type ToggleHandle,
 } from './fields';
 import { icon } from './icons';
+import { REDO_SHORTCUT, UNDO_SHORTCUT } from './platform';
 
 type WeightKey = '400' | '600' | '700';
 type MaxDimKey = '0' | '2400' | '1600';
@@ -234,6 +235,8 @@ export class Inspector {
       h('div', { class: 'insp-group' }, [
         h('div', { class: 'insp-group-head' }, [h('span', { class: 'mono', text: '快捷键' })]),
         h('ul', { class: 'shortcut-list' }, [
+          h('li', {}, [h('kbd', { text: UNDO_SHORTCUT }), h('span', { text: '撤销' })]),
+          h('li', {}, [h('kbd', { text: REDO_SHORTCUT }), h('span', { text: '重做' })]),
           h('li', {}, [h('kbd', { text: 'G' }), h('span', { text: '参考线' })]),
           h('li', {}, [h('kbd', { text: 'S' }), h('span', { text: '吸附' })]),
           h('li', {}, [h('kbd', { text: 'F' }), h('span', { text: '适应窗口' })]),
@@ -545,6 +548,7 @@ export class Inspector {
             block.id,
             ANCHOR_X[col] ?? 0.5,
             ANCHOR_Y[row] ?? 0.5,
+            { discrete: true },
           );
         });
         anchors.push(button);
@@ -616,6 +620,7 @@ export class Inspector {
             block.id,
             (col + 0.5) / 12,
             (row + 0.5) / 12,
+            { discrete: true },
           );
         });
         locatorCells.push(button);

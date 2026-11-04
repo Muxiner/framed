@@ -33,6 +33,8 @@ const PATHS: Record<string, string> = {
   arrowDown: `<path d="M8 12.8 3.4 5h9.2Z" fill="currentColor"/>`,
   arrowLeft: `<path d="M3.2 8 11 3.4v9.2Z" fill="currentColor"/>`,
   arrowRight: `<path d="M12.8 8 5 12.6V3.4Z" fill="currentColor"/>`,
+  undo: `<path d="M6.2 3.9 2.7 7.4l3.5 3.5" ${STROKE}/><path d="M3 7.4h6.1a3.9 3.9 0 0 1 0 7.8H6.2" ${STROKE}/>`,
+  redo: `<path d="M9.8 3.9l3.5 3.5-3.5 3.5" ${STROKE}/><path d="M13 7.4H6.9a3.9 3.9 0 0 0 0 7.8h2.9" ${STROKE}/>`,
   alignLeft: `<path d="M2.5 3.4h11M2.5 8h6.8M2.5 12.6h8.8" ${STROKE}/>`,
   alignCenter: `<path d="M2.5 3.4h11M4.6 8h6.8M3.6 12.6h8.8" ${STROKE}/>`,
   alignRight: `<path d="M2.5 3.4h11M6.7 8h6.8M4.7 12.6h8.8" ${STROKE}/>`,

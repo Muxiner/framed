@@ -60,6 +60,7 @@ cargo run -p framed-cli -- render photo.jpg -t film -o out.png
 5. **字体**：`crates/core/assets/fonts/` 是子集化后的文件（含 OFL 文本），用 `scripts/build_fonts.py` 重新生成，不要手工替换成完整字体（wasm 体积会爆炸）。
 6. **生成物不入库**：`apps/web/public/framed_wasm.wasm`、`apps/web/dist`、`target/`、`node_modules/`、`apps/desktop/src-tauri/target/` 已在 `.gitignore`。
 7. **示例照片**：`apps/web/public/samples/` 由 `scripts/make_samples.py` 合成，带 EXIF；不要提交真实摄影师作品。
+8. **编辑器状态必须可撤销**：`apps/web` 里凡是改 `frame` / `blocks` 的操作都要走 `Editor` 的历史入口（`beginEdit` + `endCoalescedEdit`），并把连续操作合并成一步；选中、缩放、网格、抽屉、导出弹层等 UI 状态**不得**进历史。新增修改入口忘记接历史，撤销就会「跳过」这次改动。
 
 ## 视觉规范（UI）
 
@@ -85,6 +86,8 @@ npm --prefix apps/web run build      # 含 tsc --noEmit
 - **手机竖拍**：按 `Orientation` 转正后再取宽高，5–8 需要交换宽高。
 - **预览/导出一致**：限长边时先缩放照片、再按缩放后尺寸重算几何，不要缩放成品画布（否则字号比例会漂移）。
 - **Tauri 命令返回二进制**：用 `tauri::ipc::Response` 原样返回打包字节；`Vec<u8>` 走 JSON 会非常慢。
+- **撤销与受控输入框**：撤销前先 `blur`、回填配置后再恢复焦点/光标，否则 `textarea` / `range` 的 DOM 值与 `config` 不同步；`Cmd/Ctrl+Z` 在输入框聚焦时也要走应用级历史。
+- **历史内存**：快照只存 `{frame, blocks}` 且共享不可变引用；不要把 Logo dataURL 逐帧深拷贝进栈。
 
 ## 相关技能文件
 

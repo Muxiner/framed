@@ -43,6 +43,8 @@ export interface EditorState {
   exportName: string;
   dragOver: boolean;
   sampleBusy: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
 }
 
 export type Listener = (state: EditorState) => void;
@@ -71,6 +73,8 @@ function initialState(): EditorState {
     exportName: '',
     dragOver: false,
     sampleBusy: false,
+    canUndo: false,
+    canRedo: false,
   };
 }
 
@@ -144,6 +148,55 @@ function mobileQuery(): boolean {
   return window.matchMedia('(max-width: 1099px)').matches;
 }
 
+/** 历史里保存的「可见结果」：画布几何 + 内容块。网格/输出等 UI 偏好不进历史。 */
+interface HistoryEntry {
+  frame: FrameConfig;
+  blocks: Block[];
+}
+
+interface BurstState {
+  key: string;
+  mode: 'idle' | 'manual';
+  timer: number;
+}
+
+interface EditOptions {
+  /** 一次性操作：立即落一个历史步（定位器、Logo 上传等）。 */
+  discrete?: boolean;
+}
+
+interface FocusSnapshot {
+  element: HTMLElement;
+  start: number | null;
+  end: number | null;
+}
+
+const HISTORY_LIMIT = 40;
+
+function captureFocusState(active: Element | null): FocusSnapshot | null {
+  if (!(active instanceof HTMLElement)) return null;
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+    return { element: active, start: active.selectionStart, end: active.selectionEnd };
+  }
+  return { element: active, start: null, end: null };
+}
+
+function restoreFocusState(snapshot: FocusSnapshot | null): void {
+  if (!snapshot) return;
+  const { element } = snapshot;
+  if (!element.isConnected || element.hasAttribute('disabled')) return;
+  element.focus({ preventScroll: true });
+  if ((element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) &&
+      snapshot.start !== null && snapshot.end !== null) {
+    try {
+      const max = element.value.length;
+      element.setSelectionRange(Math.min(snapshot.start, max), Math.min(snapshot.end, max));
+    } catch {
+      // range / color / number 等输入不支持 selection API
+    }
+  }
+}
+
 export class Editor {
   readonly state: EditorState = initialState();
   fitScale = 1;
@@ -152,6 +205,10 @@ export class Editor {
   private engine: Engine | null = null;
   private raf = 0;
   private seq = 0;
+  private past: HistoryEntry[] = [];
+  private future: HistoryEntry[] = [];
+  private burst: BurstState | null = null;
+  private draggingBlock: string | null = null;
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -163,6 +220,127 @@ export class Editor {
   private patch(partial: Partial<EditorState>): void {
     Object.assign(this.state, partial);
     for (const listener of this.listeners) listener(this.state);
+  }
+
+  // ---------------------------------------------------------------- 撤销 / 重做
+
+  private syncHistoryFlags(): void {
+    const canUndo = this.past.length > 0;
+    const canRedo = this.future.length > 0;
+    if (canUndo === this.state.canUndo && canRedo === this.state.canRedo) return;
+    this.patch({ canUndo, canRedo });
+  }
+
+  /**
+   * 在真正修改 config 之前调用：把「修改前」的快照压栈。
+   * 相同 key 的连续操作（连续输入 / 滑杆拖动 / 拖拽）复用同一个 burst，只落一步。
+   */
+  private beginEdit(key: string, mode: 'idle' | 'manual' = 'idle', idleMs = 800): void {
+    const config = this.state.config;
+    if (!config) return;
+    if (this.burst) {
+      if (this.burst.key === key) {
+        if (this.burst.mode === 'idle') this.resetBurstTimer(idleMs);
+        return;
+      }
+      this.endCoalescedEdit();
+    }
+    this.past.push({ frame: config.frame, blocks: config.blocks });
+    if (this.past.length > HISTORY_LIMIT) this.past.shift();
+    this.future.length = 0;
+    this.burst = { key, mode, timer: 0 };
+    if (mode === 'idle') this.resetBurstTimer(idleMs);
+    this.syncHistoryFlags();
+  }
+
+  private resetBurstTimer(idleMs: number): void {
+    const burst = this.burst;
+    if (!burst) return;
+    if (burst.timer) window.clearTimeout(burst.timer);
+    burst.timer = window.setTimeout(() => this.endCoalescedEdit(), idleMs);
+  }
+
+  /** 收束当前连续编辑（文字静默/失焦/Enter、滑杆释放、拖拽结束、切换选中）。 */
+  endCoalescedEdit(): void {
+    const burst = this.burst;
+    if (!burst) return;
+    if (burst.timer) window.clearTimeout(burst.timer);
+    this.burst = null;
+    this.syncHistoryFlags();
+  }
+
+  private resetHistory(): void {
+    if (this.burst?.timer) window.clearTimeout(this.burst.timer);
+    this.burst = null;
+    this.draggingBlock = null;
+    this.past = [];
+    this.future = [];
+    this.syncHistoryFlags();
+  }
+
+  undo(): void {
+    this.endCoalescedEdit();
+    this.draggingBlock = null;
+    const config = this.state.config;
+    if (!config) return;
+    const previous = this.past.pop();
+    if (!previous) {
+      this.syncHistoryFlags();
+      return;
+    }
+    this.future.push({ frame: config.frame, blocks: config.blocks });
+    if (this.future.length > HISTORY_LIMIT) this.future.shift();
+    this.applyHistory(previous);
+  }
+
+  redo(): void {
+    this.endCoalescedEdit();
+    this.draggingBlock = null;
+    const config = this.state.config;
+    if (!config) return;
+    const next = this.future.pop();
+    if (!next) {
+      this.syncHistoryFlags();
+      return;
+    }
+    this.past.push({ frame: config.frame, blocks: config.blocks });
+    if (this.past.length > HISTORY_LIMIT) this.past.shift();
+    this.applyHistory(next);
+  }
+
+  private applyHistory(entry: HistoryEntry): void {
+    const config = this.state.config;
+    if (!config) return;
+    // 撤销时输入框可能正聚焦：先失焦让受控控件同步，再回填文本并恢复焦点/光标。
+    const focus = captureFocusState(document.activeElement);
+    if (focus && focus.element !== document.body) focus.element.blur();
+    const next: RenderConfig = { ...config, frame: entry.frame, blocks: entry.blocks };
+    const selectedId = this.resolveHistorySelection(config.blocks, entry.blocks);
+    this.patch({
+      config: next,
+      selectedId,
+      canUndo: this.past.length > 0,
+      canRedo: this.future.length > 0,
+    });
+    if (focus) restoreFocusState(focus);
+    this.scheduleRender();
+  }
+
+  /** 撤销/重做后尽量选中发生变化的块，方便用户看到改动。 */
+  private resolveHistorySelection(before: readonly Block[], after: readonly Block[]): string | null {
+    const selected = this.state.selectedId;
+    const afterIds = new Set(after.map((block) => block.id));
+    const beforeById = new Map(before.map((block) => [block.id, block]));
+    const changed: string[] = [];
+    for (const block of after) {
+      const previous = beforeById.get(block.id);
+      if (!previous || previous !== block) changed.push(block.id);
+    }
+    if (selected && changed.includes(selected)) return selected;
+    if (selected && changed.length === 0 && afterIds.has(selected)) return selected;
+    for (const id of changed) if (afterIds.has(id)) return id;
+    if (selected && afterIds.has(selected)) return selected;
+    return after[0]?.id ?? null;
   }
 
   async init(): Promise<void> {
@@ -239,6 +417,7 @@ export class Editor {
         status: 'ready',
         zoom: 'fit',
       });
+      this.resetHistory();
       await this.renderPreview();
     } catch (error) {
       this.patch({ rendering: false });
@@ -267,8 +446,10 @@ export class Editor {
         preserveGrid: true,
         preserveOutput: true,
       });
+      this.beginEdit('template', 'manual');
       this.patch({ config });
       this.scheduleRender();
+      this.endCoalescedEdit();
     } catch (error) {
       toast(`模板切换失败：${errorMessage(error)}`, 'error', 5000);
     }
@@ -277,6 +458,13 @@ export class Editor {
   setFrame(patch: Partial<FrameConfig>): void {
     const config = this.state.config;
     if (!config) return;
+    const keys = Object.keys(patch) as (keyof FrameConfig)[];
+    if (keys.length === 0) return;
+    const changed = keys.some(
+      (key) => JSON.stringify(config.frame[key]) !== JSON.stringify(patch[key]),
+    );
+    if (!changed) return;
+    this.beginEdit(`frame:${keys.slice().sort().join(',')}`, 'idle', 600);
     this.patch({ config: { ...config, frame: { ...config.frame, ...patch } } });
     this.scheduleRender();
   }
@@ -308,6 +496,7 @@ export class Editor {
   // ---------------------------------------------------------------- 内容块
 
   select(id: string | null): void {
+    this.endCoalescedEdit();
     if (this.state.selectedId === id) return;
     this.patch({ selectedId: id });
   }
@@ -318,27 +507,63 @@ export class Editor {
     this.patch({ inspectorOpen: true, leftOpen: false });
   }
 
-  updateTextBlock(id: string, patch: Partial<Omit<TextBlock, 'type' | 'id'>>): void {
+  updateTextBlock(
+    id: string,
+    patch: Partial<Omit<TextBlock, 'type' | 'id'>>,
+    options: EditOptions = {},
+  ): void {
     const config = this.state.config;
     if (!config) return;
+    const target = config.blocks.find((block) => block.id === id);
+    if (!target || target.type !== 'text') return;
+    const keys = Object.keys(patch) as (keyof typeof patch)[];
+    if (keys.length === 0) return;
+    const changed = keys.some(
+      (key) => JSON.stringify(target[key]) !== JSON.stringify(patch[key]),
+    );
+    if (!changed) return;
+    this.beginEdit(
+      `text:${id}:${keys.slice().sort().join(',')}`,
+      options.discrete ? 'manual' : 'idle',
+      800,
+    );
     const blocks = config.blocks.map((block) =>
       block.id === id && block.type === 'text' ? ({ ...block, ...patch } as TextBlock) : block,
     );
     this.patch({ config: { ...config, blocks } });
     this.scheduleRender();
+    if (options.discrete) this.endCoalescedEdit();
   }
 
-  updateLogoBlock(id: string, patch: Partial<Omit<LogoBlock, 'type' | 'id'>>): void {
+  updateLogoBlock(
+    id: string,
+    patch: Partial<Omit<LogoBlock, 'type' | 'id'>>,
+    options: EditOptions = {},
+  ): void {
     const config = this.state.config;
     if (!config) return;
+    const target = config.blocks.find((block) => block.id === id);
+    if (!target || target.type !== 'logo') return;
+    const keys = Object.keys(patch) as (keyof typeof patch)[];
+    if (keys.length === 0) return;
+    const changed = keys.some(
+      (key) => JSON.stringify(target[key]) !== JSON.stringify(patch[key]),
+    );
+    if (!changed) return;
+    this.beginEdit(
+      `logo:${id}:${keys.slice().sort().join(',')}`,
+      options.discrete ? 'manual' : 'idle',
+      800,
+    );
     const blocks = config.blocks.map((block) =>
       block.id === id && block.type === 'logo' ? ({ ...block, ...patch } as LogoBlock) : block,
     );
     this.patch({ config: { ...config, blocks } });
     this.scheduleRender();
+    if (options.discrete) this.endCoalescedEdit();
   }
 
-  setBlockPosition(id: string, x: number, y: number): void {
+  setBlockPosition(id: string, x: number, y: number, options: EditOptions = {}): void {
     const config = this.state.config;
     if (!config) return;
     const block = config.blocks.find((item) => item.id === id);
@@ -346,19 +571,47 @@ export class Editor {
     const nx = Math.min(1, Math.max(0, x));
     const ny = Math.min(1, Math.max(0, y));
     if (Math.abs(block.x - nx) < 0.0002 && Math.abs(block.y - ny) < 0.0002) return;
+    const dragging = this.draggingBlock === id && this.burst?.key === `position:${id}`;
+    if (!dragging) {
+      this.beginEdit(
+        `position:${id}`,
+        options.discrete ? 'manual' : 'idle',
+        700,
+      );
+    }
     const blocks = config.blocks.map((item) => (item.id === id ? { ...item, x: nx, y: ny } : item));
     this.patch({ config: { ...config, blocks } });
     this.scheduleRender();
+    if (options.discrete) this.endCoalescedEdit();
+  }
+
+  /** 舞台开始拖拽：整段拖拽只记录一个历史步（pointerup 时提交）。 */
+  beginBlockDrag(id: string): void {
+    const config = this.state.config;
+    if (!config || !config.blocks.some((block) => block.id === id)) return;
+    this.endCoalescedEdit();
+    this.draggingBlock = id;
+    this.beginEdit(`position:${id}`, 'manual');
+  }
+
+  endBlockDrag(): void {
+    if (!this.draggingBlock) return;
+    this.draggingBlock = null;
+    this.endCoalescedEdit();
   }
 
   toggleVisibility(id: string): void {
     const config = this.state.config;
     if (!config) return;
-    const blocks = config.blocks.map((block) =>
-      block.id === id ? { ...block, visible: !block.visible } : block,
+    const block = config.blocks.find((item) => item.id === id);
+    if (!block) return;
+    this.beginEdit(`visibility:${id}`, 'manual');
+    const blocks = config.blocks.map((item) =>
+      item.id === id ? { ...item, visible: !item.visible } : item,
     );
     this.patch({ config: { ...config, blocks } });
     this.scheduleRender();
+    this.endCoalescedEdit();
   }
 
   async uploadLogo(file: File): Promise<void> {
@@ -368,7 +621,7 @@ export class Editor {
       if (!config) return;
       const existing = config.blocks.find((block) => block.type === 'logo');
       if (existing) {
-        this.updateLogoBlock(existing.id, { src, visible: true });
+        this.updateLogoBlock(existing.id, { src, visible: true }, { discrete: true });
       } else {
         const logo: LogoBlock = {
           type: 'logo',
@@ -384,9 +637,10 @@ export class Editor {
           width: 0.14,
         };
         const blocks = [...config.blocks, logo];
-        this.patch({ config: { ...config, blocks } });
-        this.select(logo.id);
+        this.beginEdit('logo:add', 'manual');
+        this.patch({ config: { ...config, blocks }, selectedId: logo.id });
         this.scheduleRender();
+        this.endCoalescedEdit();
       }
       toast('Logo 已更新', 'success', 2000);
     } catch (error) {
@@ -397,11 +651,15 @@ export class Editor {
   removeLogo(): void {
     const config = this.state.config;
     if (!config) return;
+    const hasLogo = config.blocks.some((block) => block.type === 'logo');
+    if (!hasLogo) return;
+    this.beginEdit('logo:remove', 'manual');
     const blocks = config.blocks.filter((block) => block.type !== 'logo');
     const selected = this.state.selectedId;
     const selectedWasLogo = config.blocks.some((block) => block.type === 'logo' && block.id === selected);
     this.patch({ config: { ...config, blocks }, selectedId: selectedWasLogo ? null : selected });
     this.scheduleRender();
+    this.endCoalescedEdit();
   }
 
   // ---------------------------------------------------------------- 舞台视图

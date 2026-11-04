@@ -283,6 +283,23 @@ button:focus:not(:focus-visible) {
   justify-content: center;
 }
 
+.history-group {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: 0 0 auto;
+  margin-left: 2px;
+  padding-left: 8px;
+  border-left: 1px solid var(--line-soft);
+}
+.history-btn {
+  width: 29px;
+  height: 29px;
+}
+.history-btn:disabled {
+  opacity: 0.26;
+}
+
 .template-nav {
   display: flex;
   align-items: center;
@@ -2200,8 +2217,26 @@ kbd {
 
 @media (max-width: 640px) {
   .topbar {
-    gap: 10px;
+    gap: 8px;
     padding: 0 12px;
+  }
+  .history-group {
+    gap: 0;
+    margin-left: 0;
+    padding-left: 0;
+    border-left: none;
+  }
+  .history-btn {
+    width: 27px;
+    height: 27px;
+  }
+  .export-main {
+    width: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+  .export-main .export-label {
+    display: none;
   }
   .brand-name {
     font-size: 13px;
@@ -2245,8 +2280,16 @@ kbd {
   .brand {
     gap: 7px;
   }
-  .export-main {
+  .topbar {
+    gap: 6px;
     padding: 0 10px;
+  }
+  .export-main {
+    width: 32px;
+    padding: 0;
+  }
+  .export-caret {
+    width: 24px;
   }
   .stage-toolbar {
     gap: 0;

@@ -52,6 +52,7 @@ open apps/desktop/src-tauri/target/release/bundle/macos/Framed.app
 - [ ] 改布局/字号 → 只用比例值，跑 `cargo test -p framed-core`，再用 `framed demo` 目检 5 个模板。
 - [ ] 改 wasm 导出 → 同步 `engine.wasm.ts` 的 `<T>` 解析与内存释放；用 Node 脚本（见下）验证 ABI。
 - [ ] 改 UI → 1440×900 与 390×844 都截图检查；输入框编辑时不能丢焦点。
+- [ ] 改编辑器里的 `frame` / `blocks` → 接入撤销历史（`beginEdit`/`endCoalescedEdit`，连续操作合并一步），并用 CDP 验证 `⌘Z` / `⇧⌘Z` 生效。
 - [ ] 改桌面命令 → `cargo check`（`apps/desktop/src-tauri`）并尽量 `tauri build` 出 `.app`。
 - [ ] 提交前：`cargo test`、`npm --prefix apps/web run build` 全绿。
 
