@@ -146,19 +146,34 @@ interface RenderMeta { width: number; height: number; blocks: BlockRect[]; }
 
 interface RenderResult { png: Uint8Array; meta: RenderMeta; }
 
+interface BatchExportItem { id: string; filename: string; config: RenderConfig; }
+interface BatchExportResult {
+  saved: number;
+  method: 'download' | 'folder';   // 网页端逐张下载 / 桌面端写入所选目录
+  paths?: string[];
+  canceled?: boolean;
+}
+
 interface Engine {
-  /** 加载/探测照片（上传后调用一次） */
-  loadImage(bytes: Uint8Array): Promise<PhotoInfo>;
+  /** 载入照片并缓存为 `id`（多图模式下每张只上传一次；不传自动生成） */
+  loadImage(bytes: Uint8Array, id?: string): Promise<PhotoInfo>;
+  /** 切换到已缓存照片（wasm 端需要 bytes，桌面端按 id 取原生缓存） */
+  selectImage(id: string, bytes?: Uint8Array): Promise<PhotoInfo>;
   /** 依据 EXIF 与模板生成默认配置（默认文字块均已摆好位） */
   defaultConfig(photo: PhotoInfo, template: FrameTemplate): Promise<RenderConfig>;
   /** 渲染。preview=true 时内部把 output.maxDim 限制为 1600、格式 PNG */
   render(config: RenderConfig, preview: boolean): Promise<RenderResult>;
   /** 导出。网页端触发下载；Tauri 端弹系统保存框。返回保存路径或 Blob */
   exportImage(config: RenderConfig, suggestedName: string): Promise<{ path?: string }>;
+  /** 批量导出：网页端逐张下载，桌面端选一次目录后写入全部 */
+  exportBatch(items: BatchExportItem[]): Promise<BatchExportResult>;
   /** 引擎标识，用于 UI 显示（wasm / tauri） */
   readonly kind: 'wasm' | 'tauri';
 }
 ```
+
+- **多图**：照片字节缓存在前端（`Map<id, Uint8Array>`）；桌面端另外在 Rust 侧按 id 缓存，切换时不重复传图。
+- **导入**：支持拖拽 1..N 张、文件选择多选、粘贴多张；上次上限 16 张，超限/非图片会跳过并提示。
 
 - `engine.ts` 负责探测环境：`window.__TAURI__` 存在 → Tauri 适配；否则加载 `/framed_wasm.wasm` → wasm 适配。
 - **开发期没有 wasm 时**，前端先接 `engine.mock.ts`（Canvas2D 近似渲染，见 §6），接口完全一致；Lead 完成后切换默认实现。
@@ -191,14 +206,17 @@ framed_render(img_ptr: *const u8, img_len: u32, cfg_ptr: *const u8, cfg_len: u32
 ### 3.3 Tauri 命令（`apps/desktop/src-tauri`）
 
 ```
-load_image(data_b64: String) -> PhotoInfo            # 原生解码 + 缓存当前照片
+load_image(data_b64: String, photo_id: Option<String>) -> PhotoInfo   # 解码 + 按 id 缓存并设为当前
+select_image(photo_id: String) -> PhotoInfo            # 切换当前照片（用原生缓存，不重传图片）
 default_config(photo_json: String, template: String) -> String
 render_image(config_json: String) -> tauri::ipc::Response   # 打包格式同 §3.2（meta+png）
 export_image(config_json: String, suggested_name: String) -> Option<String>
+export_batch(items_json: String) -> { saved, paths, canceled }       # 选目录后批量写入
 ```
 
 - 渲染走原生 `framed-core`，不加载 wasm；`render_image` 内部把 `output.maxDim` 限制为 1600。
-- `export_image` 用 `tauri-plugin-dialog` 弹保存框，返回保存路径。
+- `export_image` 用 `tauri-plugin-dialog` 弹保存框，返回保存路径；`export_batch` 弹一次文件夹选择框，按 `items_json` 里的 `{id, filename, config}` 逐张写入（文件名做路径穿越过滤）。
+- 窗口设置 `dragDropEnabled: false`，让 WebView 接收 HTML5 文件拖放（否则拖拽会被原生拖放拦截）。
 - 前端通过 `window.__TAURI__.core.invoke(...)` 调用（`withGlobalTauri: true`）。
 
 ## 4. UI 设计简报（apps/web）
@@ -223,6 +241,8 @@ export_image(config_json: String, suggested_name: String) -> Option<String>
 - 控制栏分区（可折叠）：① 照片（缩略图、换图、尺寸/EXIF 摘要）② 边框（5 个模板卡片、边距/底宽/底色/圆角）③ 内容块列表（相机/参数/日期/水印，开关 + 点击选中）④ 水印（文字、字体、字号、颜色…）⑤ Logo（上传、宽度、位置）。
 - 舞台：画布等比适应；底部悬浮工具条（适应窗口 / 缩放 % / 12 栅格开关 / 吸附开关）；画布上可**拖拽文字块**，吸附至 1/12 网格；选中块显示虚线选框 + 名称。
 - 检查器：字号、字重、行高、字间距、颜色、不透明度、对齐、阴影；**12×12 定位器**（144 格，点击定位）+ 9 宫格快捷位 + 偏移微调；`x/y` 数值输入。Logo 块显示宽度/位置/透明度。
+- 照片库：拖拽任意位置导入 1..N 张、文件多选、粘贴多图；左栏缩略图网格（当前高亮、hover 删除、点击切换、上限 16）；每张照片独立配置；切换 < 1s；导入进度与跳过提示。
+- 批量：当前边框可「应用到全部」；导出弹层支持「导出全部」，网页端逐张下载、桌面端选目录一次写入。
 - 交互：所有修改 < 100ms 内反映到预览（rAF 合并渲染请求）；渲染中显示轻微状态点；错误 toast；导出成功 toast。
 - 撤销 / 重做：`⌘/Ctrl+Z` 撤销，`⇧⌘Z` / `Ctrl+Y` 重做；顶栏按钮带禁用态与快捷键提示；历史栈上限 40。一次拖拽、一段连续文字输入（800ms 静默 / blur / Enter / 切换选中时提交）、一次滑杆拖动各记 1 步；模板切换 / 块显隐 / Logo 上传删除各 1 步。选中、缩放、12 栅格开关、抽屉、导出弹层**不进历史**；新编辑清空 redo；换照片重置历史；撤销后自动选中发生变化的块。
 - 空状态：未选图时舞台显示产品说明 + 「上传照片 / 用示例照片」。
@@ -273,3 +293,4 @@ cargo run -p framed-cli -- --help
 4. `npm --prefix apps/desktop run tauri build` 产出可双击启动的 `.app`（macOS）。
 5. UI 在 1440×900 与 390×844 两个尺寸下无溢出、无遮挡。
 6. 撤销 / 重做：拖拽一次后撤销回到原坐标、重做恢复；连续输入一次撤销清整段且输入框焦点保持；顶栏按钮禁用态正确。
+7. 多图：一次拖入 3 张照片 → 照片库 3 张、激活第一张；切换后各自的编辑配置保留；删除后数量正确；「导出全部」按每张配置产出 3 个文件（网页端下载 / 桌面端一次选目录写入）。

@@ -1,6 +1,8 @@
 // 无 wasm 时的开发/回退引擎：用 Canvas2D 近似渲染同一份 RenderConfig。
 // 真正的实现是 Rust 内核；这个 mock 只用于开发期或 wasm 缺失时保证 UI 可用。
 import type {
+  BatchExportItem,
+  BatchExportResult,
   Block,
   BlockRect,
   Engine,
@@ -260,10 +262,11 @@ class MockEngine implements Engine {
 
   private photo: PhotoInfo = { width: 1600, height: 1067, exif: { ...EMPTY_EXIF } };
   private image: HTMLImageElement | null = null;
-  private imageUrl: string | null = null;
+  private photos = new Map<string, { url: string; img: HTMLImageElement; info: PhotoInfo }>();
+  private currentId: string | null = null;
   private logos = new Map<string, HTMLImageElement>();
 
-  async loadImage(bytes: Uint8Array): Promise<PhotoInfo> {
+  async loadImage(bytes: Uint8Array, id = `mock-${Date.now().toString(36)}-${this.photos.size}`): Promise<PhotoInfo> {
     const blob = new Blob([bytes as unknown as BlobPart]);
     const url = URL.createObjectURL(blob);
     const img = new Image();
@@ -277,11 +280,27 @@ class MockEngine implements Engine {
       URL.revokeObjectURL(url);
       throw error;
     }
-    if (this.imageUrl) URL.revokeObjectURL(this.imageUrl);
-    this.imageUrl = url;
+    const previous = this.photos.get(id);
+    if (previous) URL.revokeObjectURL(previous.url);
+    const info: PhotoInfo = {
+      width: img.naturalWidth,
+      height: img.naturalHeight,
+      exif: { ...EMPTY_EXIF },
+    };
+    this.photos.set(id, { url, img, info });
+    this.currentId = id;
     this.image = img;
-    this.photo = { width: img.naturalWidth, height: img.naturalHeight, exif: { ...EMPTY_EXIF } };
-    return this.photo;
+    this.photo = info;
+    return info;
+  }
+
+  async selectImage(id: string): Promise<PhotoInfo> {
+    const entry = this.photos.get(id);
+    if (!entry) throw new Error('照片不在内存中，请重新导入');
+    this.currentId = id;
+    this.image = entry.img;
+    this.photo = entry.info;
+    return entry.info;
   }
 
   async defaultConfig(photo: PhotoInfo, template: FrameTemplate): Promise<RenderConfig> {
@@ -402,6 +421,27 @@ class MockEngine implements Engine {
     anchor.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     return {};
+  }
+
+  async exportBatch(items: BatchExportItem[]): Promise<BatchExportResult> {
+    const current = this.currentId;
+    const paths: string[] = [];
+    for (const item of items) {
+      await this.selectImage(item.id);
+      const result = await this.render(item.config, false);
+      const mime = item.config.output.format === 'jpeg' ? 'image/jpeg' : 'image/png';
+      const blob = new Blob([result.png as unknown as BlobPart], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = item.filename;
+      anchor.click();
+      paths.push(item.filename);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+      await new Promise((resolve) => window.setTimeout(resolve, 420));
+    }
+    if (current && current !== this.currentId) await this.selectImage(current);
+    return { saved: paths.length, method: 'download', paths };
   }
 }
 

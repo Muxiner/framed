@@ -1,5 +1,7 @@
 // Tauri 桌面引擎：调用 src-tauri 暴露的原生命令（走原生 framed-core，不加载 wasm）。
 import type {
+  BatchExportItem,
+  BatchExportResult,
   Engine,
   ExportResult,
   FrameTemplate,
@@ -56,8 +58,15 @@ function core(): TauriCore {
 class TauriEngine implements Engine {
   readonly kind = 'tauri' as const;
 
-  async loadImage(bytes: Uint8Array): Promise<PhotoInfo> {
-    return core().invoke<PhotoInfo>('load_image', { dataB64: toBase64(bytes) });
+  async loadImage(bytes: Uint8Array, id?: string): Promise<PhotoInfo> {
+    return core().invoke<PhotoInfo>('load_image', {
+      dataB64: toBase64(bytes),
+      photoId: id ?? null,
+    });
+  }
+
+  async selectImage(id: string): Promise<PhotoInfo> {
+    return core().invoke<PhotoInfo>('select_image', { photoId: id });
   }
 
   async defaultConfig(photo: PhotoInfo, template: FrameTemplate): Promise<RenderConfig> {
@@ -85,6 +94,20 @@ class TauriEngine implements Engine {
       suggestedName,
     });
     return path ? { path } : {};
+  }
+
+  async exportBatch(items: BatchExportItem[]): Promise<BatchExportResult> {
+    const result = await core().invoke<{
+      saved: number;
+      paths: string[];
+      canceled?: boolean;
+    }>('export_batch', { itemsJson: JSON.stringify(items) });
+    return {
+      saved: result.saved,
+      method: 'folder',
+      paths: result.paths,
+      canceled: result.canceled ?? false,
+    };
   }
 }
 

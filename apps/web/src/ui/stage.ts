@@ -46,6 +46,8 @@ export class Stage {
   private readonly empty: HTMLElement;
   private readonly loading: HTMLElement;
   private readonly dropVeil: HTMLElement;
+  private readonly dropTitle: HTMLElement;
+  private readonly busyLabel: HTMLElement;
   private readonly hud: HTMLElement;
   private readonly busy: HTMLElement;
   private readonly toolbar: HTMLElement;
@@ -86,11 +88,12 @@ export class Stage {
       h('div', { class: 'spinner', ariaHidden: true }),
       h('p', { class: 'stage-loading-text', text: '正在载入照片…' }),
     ]);
+    this.dropTitle = h('p', { class: 'drop-title', text: '松开以导入照片' });
     this.dropVeil = h('div', { class: 'drop-veil', hidden: true }, [
       h('div', { class: 'drop-inner' }, [
         h('span', { class: 'drop-ico', html: icon('upload', 22) }),
-        h('p', { text: '松开以载入照片' }),
-        h('span', { class: 'drop-hint mono', text: 'JPEG / PNG / WebP / GIF / TIFF' }),
+        this.dropTitle,
+        h('span', { class: 'drop-hint mono', text: 'JPEG / PNG / WebP / GIF / TIFF · 支持多张' }),
       ]),
     ]);
     this.hud = h('div', { class: 'stage-hud', hidden: true }, [
@@ -98,9 +101,10 @@ export class Stage {
       h('span', { class: 'hud-sep mono', text: '·' }),
       h('span', { class: 'hud-template mono' }),
     ]);
+    this.busyLabel = h('span', { class: 'busy-label', text: '渲染中' });
     this.busy = h('div', { class: 'stage-busy mono', hidden: true }, [
       h('span', { class: 'status-dot is-rendering' }),
-      h('span', { text: '渲染中' }),
+      this.busyLabel,
     ]);
 
     this.fitButton = iconButton({
@@ -177,18 +181,18 @@ export class Stage {
   private buildEmpty(): HTMLElement {
     const fileInput = h('input', {
       class: 'visually-hidden',
-      attrs: { type: 'file', accept: 'image/*', tabindex: '-1' },
+      attrs: { type: 'file', accept: 'image/*', tabindex: '-1', multiple: '' },
     });
     fileInput.addEventListener('change', () => {
-      const file = fileInput.files?.[0];
-      if (file) void this.editor.loadPhoto(file);
+      const files = Array.from(fileInput.files ?? []);
+      if (files.length) void this.editor.importFiles(files);
       fileInput.value = '';
     });
     document.body.append(fileInput);
 
     const upload = h('button', {
       class: 'btn btn-accent btn-lg',
-      html: `${icon('upload', 15)}<span>上传照片</span>`,
+      html: `${icon('upload', 15)}<span>导入照片</span>`,
       attrs: { type: 'button' },
     });
     upload.addEventListener('click', () => fileInput.click());
@@ -226,10 +230,10 @@ export class Stage {
       h('div', { class: 'empty-inner' }, [
         h('span', { class: 'empty-mark', html: brandMark(40) }),
         h('p', { class: 'empty-kicker mono', text: 'PHOTO → FRAME → WATERMARK' }),
-        h('h1', { class: 'empty-title', text: '把照片放进暗房' }),
+        h('h1', { class: 'empty-title', text: '拖入多张照片开始' }),
         h('p', {
           class: 'empty-desc',
-          text: '框影为照片加上相机取景框、拍摄参数与文字水印。拖入一张照片，或先看看示例效果。',
+          text: '框影为照片加上相机取景框、拍摄参数与文字水印。一次拖入 1–16 张照片，每张都拥有独立的边框与水印配置。',
         }),
         h('div', { class: 'empty-actions' }, [upload, useSample]),
         h('div', { class: 'empty-samples-wrap' }, [
@@ -238,7 +242,7 @@ export class Stage {
         ]),
         h('p', {
           class: 'empty-hints mono',
-          text: '拖拽 / 粘贴照片 · G 网格 · S 吸附 · 方向键微调',
+          text: '拖拽多张 / 粘贴多图 / 导入照片 · G 网格 · S 吸附 · 方向键微调',
         }),
       ]),
     ]);
@@ -286,13 +290,33 @@ export class Stage {
     setHidden(this.loading, !showLoading);
     if (showLoading) {
       const label = this.loading.querySelector('.stage-loading-text');
-      if (label) setText(label, state.sampleBusy ? '正在准备示例照片…' : '正在载入照片…');
+      if (label) {
+        setText(
+          label,
+          state.importing
+            ? `正在导入 ${state.importing.done}/${state.importing.total}…`
+            : state.sampleBusy
+              ? '正在准备示例照片…'
+              : '正在载入照片…',
+        );
+      }
     }
     setHidden(this.hud, !meta);
     setHidden(this.toolbar, !meta);
-    setHidden(this.busy, !state.rendering || !meta);
+    const busy = state.importing !== null || (state.rendering && meta !== null);
+    setHidden(this.busy, !busy);
+    setText(
+      this.busyLabel,
+      state.importing ? `导入中 ${state.importing.done}/${state.importing.total}` : '渲染中',
+    );
     toggleClass(this.root, 'is-dragover', state.dragOver);
     setHidden(this.dropVeil, !state.dragOver);
+    if (state.dragOver) {
+      setText(
+        this.dropTitle,
+        state.dragCount > 1 ? `松开以导入 ${state.dragCount} 张照片` : '松开以导入照片',
+      );
+    }
 
     if (meta && state.config) {
       const dims = this.hud.querySelector('.hud-dims');

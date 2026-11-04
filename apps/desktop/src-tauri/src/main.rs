@@ -9,7 +9,10 @@
 //   [4+meta_len..+4)   二进制长度（u32，小端）
 //   [..+bin_len)       PNG / JPEG 字节
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD};
 use base64::Engine as _;
@@ -21,8 +24,25 @@ use tauri_plugin_dialog::DialogExt;
 /// `render_image`（预览）内部把长边限制到该值（CONTRACT §3.3）。
 const PREVIEW_MAX_DIM: u32 = 1600;
 
-/// 当前照片的原始字节；重复 `load_image` 直接覆盖。
-struct PhotoCache(Mutex<Option<Vec<u8>>>);
+/// 当前照片 + 多图缓存（多图模式下每张照片只上传一次，切换按 id 取）。
+struct PhotoCache(Mutex<PhotoState>);
+
+#[derive(Default)]
+struct PhotoState {
+    current: Option<String>,
+    photos: HashMap<String, Vec<u8>>,
+}
+
+static PHOTO_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn new_photo_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let sequence = PHOTO_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("photo-{nanos:x}-{sequence}")
+}
 
 /// 一次原生渲染的结果。
 struct Rendered {
@@ -76,9 +96,50 @@ fn current_photo(state: &State<'_, PhotoCache>) -> Result<Vec<u8>, String> {
         .0
         .lock()
         .map_err(|_| "照片缓存锁已损坏，请重新加载照片".to_string())?;
-    guard
+    let id = guard
+        .current
         .clone()
-        .ok_or_else(|| "尚未载入照片，请先上传照片".to_string())
+        .ok_or_else(|| "尚未载入照片，请先上传照片".to_string())?;
+    guard
+        .photos
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| "当前照片不在缓存中，请重新导入".to_string())
+}
+
+/// 按 id 取已缓存照片字节。
+fn photo_bytes(state: &State<'_, PhotoCache>, id: &str) -> Result<Vec<u8>, String> {
+    let guard = state
+        .0
+        .lock()
+        .map_err(|_| "照片缓存锁已损坏".to_string())?;
+    guard
+        .photos
+        .get(id)
+        .cloned()
+        .ok_or_else(|| format!("照片 {id} 不在缓存中，请重新导入"))
+}
+
+/// 只保留安全的文件名字符，避免路径穿越。
+fn sanitize_filename(name: &str) -> String {
+    let mut cleaned: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.' | ' ' | '(' | ')') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    cleaned = cleaned.trim_matches(['-', '.', ' ']).to_string();
+    if cleaned.is_empty() {
+        cleaned = "framed.png".to_string();
+    }
+    if cleaned.chars().count() > 160 {
+        cleaned = cleaned.chars().take(160).collect();
+    }
+    cleaned
 }
 
 /// 原生渲染一次；`preview` 时把 output.maxDim 限制到 1600。
@@ -159,16 +220,37 @@ fn ensure_extension(suggested: &str, ext: &str) -> String {
 #[tauri::command(async)]
 fn load_image(
     data_b64: String,
+    photo_id: Option<String>,
     state: State<'_, PhotoCache>,
 ) -> Result<framed_core::PhotoInfo, String> {
     let bytes = decode_base64(&data_b64)?;
+    let info = framed_core::probe(&bytes).map_err(|err| format!("解析照片失败：{err}"))?;
+    let id = photo_id.filter(|id| !id.is_empty()).unwrap_or_else(new_photo_id);
+    {
+        let mut guard = state
+            .0
+            .lock()
+            .map_err(|_| "照片缓存锁已损坏".to_string())?;
+        guard.photos.insert(id.clone(), bytes);
+        guard.current = Some(id);
+    }
+    Ok(info)
+}
+
+/// 切换到已缓存的照片（多图模式），不重复传输图片字节。
+#[tauri::command(async)]
+fn select_image(
+    photo_id: String,
+    state: State<'_, PhotoCache>,
+) -> Result<framed_core::PhotoInfo, String> {
+    let bytes = photo_bytes(&state, &photo_id)?;
     let info = framed_core::probe(&bytes).map_err(|err| format!("解析照片失败：{err}"))?;
     {
         let mut guard = state
             .0
             .lock()
             .map_err(|_| "照片缓存锁已损坏".to_string())?;
-        *guard = Some(bytes);
+        guard.current = Some(photo_id);
     }
     Ok(info)
 }
@@ -232,15 +314,71 @@ fn export_image(
     Ok(Some(path.display().to_string()))
 }
 
+/// 批量导出：选一次目录，把当前缓存里的多张照片按各自配置渲染写入。
+#[tauri::command(async)]
+fn export_batch(
+    app: tauri::AppHandle,
+    items_json: String,
+    state: State<'_, PhotoCache>,
+) -> Result<Value, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct BatchItem {
+        id: String,
+        filename: String,
+        config: framed_core::RenderConfig,
+    }
+
+    let items: Vec<BatchItem> =
+        serde_json::from_str(&items_json).map_err(|err| format!("批量导出参数解析失败：{err}"))?;
+    if items.is_empty() {
+        return Ok(json!({ "saved": 0, "paths": [], "canceled": false }));
+    }
+
+    // 先渲染，失败直接报错；再让用户选目录。
+    let mut rendered: Vec<(String, Vec<u8>)> = Vec::with_capacity(items.len());
+    for item in &items {
+        let bytes = photo_bytes(&state, &item.id)?;
+        let config_json = serde_json::to_string(&item.config)
+            .map_err(|err| format!("批量导出配置序列化失败：{err}"))?;
+        let output = render_photo(&bytes, &config_json, false)?;
+        rendered.push((sanitize_filename(&item.filename), output.bytes));
+    }
+
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("选择批量导出文件夹")
+        .blocking_pick_folder();
+    let Some(folder) = picked else {
+        return Ok(json!({ "saved": 0, "paths": [], "canceled": true }));
+    };
+    let folder = folder
+        .into_path()
+        .map_err(|err| format!("目录路径无效：{err}"))?;
+    std::fs::create_dir_all(&folder).map_err(|err| format!("创建目录失败：{err}"))?;
+
+    let mut paths = Vec::with_capacity(rendered.len());
+    for (filename, bytes) in rendered {
+        let path = folder.join(filename);
+        std::fs::write(&path, &bytes).map_err(|err| format!("写入文件失败：{err}"))?;
+        paths.push(path.display().to_string());
+    }
+
+    Ok(json!({ "saved": paths.len(), "paths": paths, "canceled": false }))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(PhotoCache(Mutex::new(None)))
+        .manage(PhotoCache(Mutex::new(PhotoState::default())))
         .invoke_handler(tauri::generate_handler![
             load_image,
+            select_image,
             default_config,
             render_image,
-            export_image
+            export_image,
+            export_batch
         ])
         .run(tauri::generate_context!())
         .expect("框影 Framed 启动失败");
@@ -318,6 +456,15 @@ mod tests {
         let data_url = format!("data:image/png;base64,{encoded}");
         assert_eq!(decode_base64(&data_url).unwrap(), TINY_PNG);
         assert!(decode_base64("").is_err());
+    }
+
+    /// 批量导出文件名过滤路径分隔符，防止写出目录。
+    #[test]
+    fn sanitize_filename_blocks_traversal() {
+        assert_eq!(sanitize_filename("../../etc/passwd"), "etc-passwd");
+        assert_eq!(sanitize_filename("照片 01.png"), "照片 01.png");
+        assert_eq!(sanitize_filename(""), "framed.png");
+        assert_eq!(sanitize_filename("a/b\\c.png"), "a-b-c.png");
     }
 
     /// 导出扩展名跟随 output.format，且不重复追加。

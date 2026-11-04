@@ -7,7 +7,7 @@ import {
   type FrameTemplate,
 } from '../types';
 import { h, percent, setText, setValue, toggleClass } from './dom';
-import type { Editor, EditorState } from './editor';
+import { LIBRARY_LIMIT, type Editor, type EditorState, type LibraryPhoto } from './editor';
 import {
   colorField,
   iconButton,
@@ -49,6 +49,12 @@ interface BlockRow {
   logoImg: HTMLImageElement | null;
 }
 
+interface LibraryItemHandle {
+  root: HTMLElement;
+  thumb: HTMLButtonElement;
+  remove: HTMLButtonElement;
+}
+
 function exposureLine(state: EditorState): string {
   const exif = state.photo?.exif;
   if (!exif) return '—';
@@ -68,12 +74,24 @@ export class LeftPanel {
   private readonly photoInput: HTMLInputElement;
   private readonly logoInput: HTMLInputElement;
 
+  private photoSection!: SectionHandle;
   private photoThumb!: HTMLImageElement;
   private photoBadge!: HTMLElement;
   private photoName!: HTMLElement;
   private photoSub!: HTMLElement;
   private photoEmpty!: HTMLElement;
   private exifValues = new Map<string, HTMLElement>();
+  private importButton!: HTMLButtonElement;
+  private libraryGrid!: HTMLElement;
+  private libraryCount!: HTMLElement;
+  private libraryClear!: HTMLButtonElement;
+  private libraryProgress!: HTMLElement;
+  private libraryProgressText!: HTMLElement;
+  private libraryEmpty!: HTMLElement;
+  private libraryItems = new Map<string, LibraryItemHandle>();
+  private libraryIds = '';
+  private libraryActive: string | null = null;
+  private libraryImporting = false;
 
   private templateCards = new Map<FrameTemplate, HTMLButtonElement>();
   private frameSection!: SectionHandle;
@@ -83,6 +101,7 @@ export class LeftPanel {
   private radiusField!: SliderHandle;
   private holesField!: ToggleHandle;
   private holesRow!: HTMLElement;
+  private applyAllButton!: HTMLButtonElement;
 
   private blocksSection!: SectionHandle;
   private blockList!: HTMLElement;
@@ -106,8 +125,11 @@ export class LeftPanel {
 
   constructor(editor: Editor) {
     this.editor = editor;
-    this.photoInput = this.makeFileInput('image/*', (file) => void editor.loadPhoto(file));
-    this.logoInput = this.makeFileInput('image/png,image/jpeg,image/webp', (file) => void editor.uploadLogo(file));
+    this.photoInput = this.makeFileInput('image/*', (files) => void editor.importFiles(files), true);
+    this.logoInput = this.makeFileInput('image/png,image/jpeg,image/webp', (files) => {
+      const file = files[0];
+      if (file) void editor.uploadLogo(file);
+    });
 
     const head = h('div', { class: 'panel-head' }, [
       h('span', { class: 'panel-title mono', text: '控制' }),
@@ -145,14 +167,18 @@ export class LeftPanel {
     this.update(editor.state);
   }
 
-  private makeFileInput(accept: string, onPick: (file: File) => void): HTMLInputElement {
+  private makeFileInput(
+    accept: string,
+    onPick: (files: File[]) => void,
+    multiple = false,
+  ): HTMLInputElement {
     const input = h('input', {
       class: 'visually-hidden',
-      attrs: { type: 'file', accept, tabindex: '-1' },
+      attrs: { type: 'file', accept, tabindex: '-1', ...(multiple ? { multiple: '' } : {}) },
     });
     input.addEventListener('change', () => {
-      const file = input.files?.[0];
-      if (file) onPick(file);
+      const files = Array.from(input.files ?? []);
+      if (files.length) onPick(files);
       input.value = '';
     });
     return input;
@@ -167,7 +193,7 @@ export class LeftPanel {
     const thumbWrap = h('div', { class: 'photo-thumb-wrap' }, [this.photoThumb, this.photoBadge, this.photoEmpty]);
 
     this.photoName = h('span', { class: 'photo-name', text: '尚未载入照片' });
-    this.photoSub = h('span', { class: 'photo-sub mono', text: '拖入照片或选择示例' });
+    this.photoSub = h('span', { class: 'photo-sub mono', text: '拖入 / 粘贴多张照片开始' });
 
     const exifGrid = h('div', { class: 'exif-grid' });
     const rows: [string, string][] = [
@@ -187,11 +213,42 @@ export class LeftPanel {
       );
     }
 
-    const replace = textButton('更换照片', {
-      icon: 'image',
+    this.importButton = textButton('导入照片', {
+      icon: 'upload',
       className: 'btn-block',
+      title: '导入照片（可多选）',
       onClick: () => this.photoInput.click(),
     });
+
+    this.libraryGrid = h('div', { class: 'library-grid', role: 'list', ariaLabel: '照片库' });
+    this.libraryCount = h('span', { class: 'library-count mono', text: '0 张' });
+    this.libraryClear = h('button', {
+      class: 'library-clear',
+      text: '清空',
+      ariaLabel: '清空照片库',
+      attrs: { type: 'button' },
+    });
+    this.libraryClear.addEventListener('click', () => this.editor.clearLibrary());
+    this.libraryProgressText = h('span', { class: 'library-progress-text mono', text: '正在导入…' });
+    this.libraryProgress = h('div', { class: 'library-progress', hidden: true }, [
+      h('span', { class: 'mini-spinner', ariaHidden: true }),
+      this.libraryProgressText,
+    ]);
+    this.libraryEmpty = h('p', {
+      class: 'library-empty-note',
+      text: `拖入照片开始，或粘贴 / 导入多张（最多 ${LIBRARY_LIMIT} 张）。`,
+    });
+    const library = h('div', { class: 'library-block' }, [
+      h('div', { class: 'library-head' }, [
+        h('span', { class: 'library-title mono', text: '照片库' }),
+        this.libraryCount,
+        h('span', { class: 'library-head-spacer' }),
+        this.libraryClear,
+      ]),
+      this.libraryProgress,
+      this.libraryEmpty,
+      this.libraryGrid,
+    ]);
 
     const sampleStrip = h('div', { class: 'sample-strip', role: 'group', ariaLabel: '示例照片' });
     for (const sample of SAMPLES) {
@@ -204,12 +261,97 @@ export class LeftPanel {
         h('div', { class: 'photo-info' }, [this.photoName, this.photoSub]),
       ]),
       exifGrid,
-      replace,
+      this.importButton,
+      h('p', { class: 'sec-note', text: '支持多选、拖拽到任意位置、粘贴多张。' }),
+      library,
       h('span', { class: 'sample-strip-label mono', text: '示例照片' }),
       sampleStrip,
     ]);
 
-    return section({ index: '01', title: '照片', open: true, body }).root;
+    this.photoSection = section({ index: '01', title: '照片', open: true, body });
+    return this.photoSection.root;
+  }
+
+  private buildLibraryItem(entry: LibraryPhoto): LibraryItemHandle {
+    const img = h('img', { attrs: { alt: '', loading: 'lazy', draggable: 'false' } });
+    img.src = entry.thumbUrl;
+    const thumb = h(
+      'button',
+      {
+        class: 'library-thumb-btn',
+        title: entry.name,
+        ariaLabel: `切换到 ${entry.name}`,
+        attrs: { type: 'button' },
+      },
+      [
+        img,
+        h('span', { class: 'library-scrim', ariaHidden: true }),
+        h('span', { class: 'library-name', text: entry.name }),
+      ],
+    );
+    thumb.addEventListener('click', () => void this.editor.switchPhoto(entry.id));
+
+    const remove = h('button', {
+      class: 'library-remove',
+      html: icon('close', 10),
+      title: '删除照片',
+      ariaLabel: `删除 ${entry.name}`,
+      attrs: { type: 'button' },
+    });
+    remove.addEventListener('click', (event) => {
+      event.stopPropagation();
+      void this.editor.deletePhoto(entry.id);
+    });
+
+    const root = h('div', { class: 'library-item', role: 'listitem', data: { id: entry.id } }, [
+      thumb,
+      remove,
+    ]);
+    return { root, thumb, remove };
+  }
+
+  private syncLibrary(state: EditorState): void {
+    const ids = state.library.map((entry) => entry.id).join('|');
+    if (ids !== this.libraryIds) {
+      this.libraryIds = ids;
+      this.libraryActive = null;
+      this.libraryItems.clear();
+      this.libraryGrid.replaceChildren();
+      for (const entry of state.library) {
+        const item = this.buildLibraryItem(entry);
+        this.libraryItems.set(entry.id, item);
+        this.libraryGrid.append(item.root);
+      }
+    }
+
+    const importing = state.importing;
+    const busy = importing !== null;
+    if (this.libraryImporting !== busy) {
+      this.libraryImporting = busy;
+      this.importButton.disabled = busy;
+      this.libraryClear.disabled = busy;
+    }
+    setText(this.libraryCount, `已导入 ${state.library.length} 张`);
+    this.photoSection.setBadge(state.library.length > 0 ? `${state.library.length} 张` : null);
+    this.libraryClear.hidden = state.library.length === 0;
+    this.libraryEmpty.hidden = state.library.length > 0 || busy;
+    this.libraryProgress.hidden = !importing;
+    if (importing) {
+      setText(this.libraryProgressText, `正在导入 ${importing.done}/${importing.total}`);
+    }
+
+    if (this.libraryActive !== state.activePhotoId) {
+      this.libraryActive = state.activePhotoId;
+      for (const [id, item] of this.libraryItems) {
+        const active = id === state.activePhotoId;
+        toggleClass(item.root, 'is-active', active);
+        item.thumb.setAttribute('aria-current', active ? 'true' : 'false');
+      }
+    }
+    for (const item of this.libraryItems.values()) {
+      item.thumb.disabled = busy;
+      item.remove.disabled = busy;
+    }
   }
 
   private buildSampleChip(id: SampleId, label: string): HTMLElement {
@@ -306,6 +448,14 @@ export class LeftPanel {
     this.holesRow = this.holesField.root;
     this.holesRow.hidden = true;
 
+    this.applyAllButton = textButton('边框应用到全部', {
+      icon: 'frame',
+      className: 'btn-block btn-ghost frame-apply-all',
+      title: '把当前边框参数复制到照片库中的全部照片',
+      onClick: () => this.editor.applyFrameToAll(),
+    });
+    this.applyAllButton.hidden = true;
+
     this.frameSection = section({
       index: '02',
       title: '边框',
@@ -313,6 +463,7 @@ export class LeftPanel {
       open: true,
       body: h('div', {}, [
         cards,
+        this.applyAllButton,
         this.marginField.root,
         this.bottomField.root,
         this.backgroundField.root,
@@ -612,13 +763,22 @@ export class LeftPanel {
     setText(this.photoName, state.photoName || '尚未载入照片');
     setText(
       this.photoSub,
-      photo ? `${fileExt(state.photoName)} · 已载入渲染内核` : '拖入照片或选择示例',
+      photo ? `${fileExt(state.photoName)} · 已载入渲染内核` : '拖入 / 粘贴多张照片开始',
     );
     this.photoEmpty.hidden = photo !== null;
     this.setExif('camera', photo?.exif.camera || '—');
     this.setExif('lens', photo?.exif.lens || '—');
     this.setExif('exposure', exposureLine(state));
     this.setExif('date', photo?.exif.date || '—');
+    this.syncLibrary(state);
+    const libraryCount = state.library.length;
+    this.importButton.disabled = state.importing !== null || state.status === 'boot';
+    this.applyAllButton.hidden = libraryCount < 2;
+    this.applyAllButton.disabled = libraryCount < 2;
+    setText(
+      this.applyAllButton.querySelector('span') ?? this.applyAllButton,
+      `边框应用到全部（${libraryCount} 张）`,
+    );
 
     // 边框
     const config = state.config;

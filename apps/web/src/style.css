@@ -468,6 +468,17 @@ button:focus:not(:focus-visible) {
   margin-top: 4px;
   height: 32px;
 }
+.export-popover .export-all-btn {
+  margin-top: 8px;
+  height: 30px;
+  font-size: 11px;
+  border-color: var(--line);
+  color: var(--text-dim);
+}
+.export-popover .export-all-btn:hover:not(:disabled) {
+  border-color: rgba(229, 181, 103, 0.4);
+  color: var(--accent);
+}
 
 /* =========================================================================== 通用面板 */
 
@@ -1167,6 +1178,185 @@ button:focus:not(:focus-visible) {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
 }
 
+/* =========================================================================== 左栏 · 照片库 */
+
+.library-block {
+  margin-top: 14px;
+}
+.library-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+.library-title {
+  font-size: 8.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+.library-count {
+  font-size: 9px;
+  color: var(--text-dim);
+}
+.library-head-spacer {
+  flex: 1;
+}
+.library-clear {
+  padding: 2px 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted-2);
+  font-size: 9.5px;
+  transition: color 0.14s, background 0.14s;
+}
+.library-clear:hover {
+  color: var(--danger);
+  background: rgba(209, 105, 92, 0.08);
+}
+.library-progress {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  margin-bottom: 8px;
+  border: 1px solid rgba(229, 181, 103, 0.22);
+  border-radius: 6px;
+  background: #171310;
+  color: var(--accent);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+}
+.mini-spinner {
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid rgba(229, 181, 103, 0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.library-item {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #0b0a09;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.library-item:hover {
+  border-color: #4a4339;
+}
+.library-item.is-active {
+  border-color: rgba(229, 181, 103, 0.75);
+  box-shadow: 0 0 0 1px rgba(229, 181, 103, 0.25), 0 0 12px rgba(229, 181, 103, 0.12);
+}
+.library-item.is-active::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  z-index: 2;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(229, 181, 103, 0.8);
+  pointer-events: none;
+}
+.library-thumb-btn {
+  display: block;
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  overflow: hidden;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+.library-thumb-btn img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.3s ease;
+}
+.library-item:hover .library-thumb-btn img {
+  transform: scale(1.05);
+}
+.library-thumb-btn:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.library-scrim {
+  position: absolute;
+  inset: auto 0 0;
+  height: 55%;
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.72));
+  pointer-events: none;
+}
+.library-name {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 3px;
+  overflow: hidden;
+  color: #efeae1;
+  font-size: 7.5px;
+  line-height: 1.2;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  pointer-events: none;
+}
+.library-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  background: rgba(13, 12, 11, 0.78);
+  color: var(--text-dim);
+  opacity: 0;
+  transition: opacity 0.14s, color 0.14s, background 0.14s, border-color 0.14s;
+}
+.library-item:hover .library-remove,
+.library-remove:focus-visible {
+  opacity: 1;
+}
+.library-remove:hover {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+.library-empty-note {
+  margin: 0;
+  color: var(--muted-2);
+  font-size: 10px;
+  line-height: 1.7;
+}
+@media (hover: none) {
+  .library-remove {
+    opacity: 1;
+  }
+}
+
 /* =========================================================================== 左栏 · 边框模板 */
 
 .template-grid {
@@ -1261,6 +1451,15 @@ button:focus:not(:focus-visible) {
 }
 .tpl-card.is-active .tpl-name {
   color: var(--accent);
+}
+
+.frame-apply-all {
+  margin: -4px 0 16px;
+  height: 28px;
+  font-size: 10.5px;
+}
+.frame-apply-all[hidden] {
+  display: none;
 }
 
 /* =========================================================================== 左栏 · 内容块 */

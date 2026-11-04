@@ -156,16 +156,29 @@ function hasFiles(event: DragEvent): boolean {
   return types ? Array.from(types).includes('Files') : false;
 }
 
+function dragFileCount(event: DragEvent): number {
+  const transfer = event.dataTransfer;
+  if (!transfer) return 1;
+  const items = transfer.items;
+  if (items && items.length > 0) {
+    let count = 0;
+    for (const item of Array.from(items)) if (item.kind === 'file') count += 1;
+    if (count > 0) return count;
+  }
+  return Math.max(1, transfer.files?.length ?? 1);
+}
+
 window.addEventListener('dragenter', (event) => {
   if (!hasFiles(event)) return;
   event.preventDefault();
   dragDepth += 1;
-  editor.setDragOver(true);
+  editor.setDragOver(true, dragFileCount(event));
 });
 window.addEventListener('dragover', (event) => {
   if (!hasFiles(event)) return;
   event.preventDefault();
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  editor.setDragOver(true, dragFileCount(event));
 });
 window.addEventListener('dragleave', (event) => {
   if (!hasFiles(event)) return;
@@ -177,22 +190,22 @@ window.addEventListener('drop', (event) => {
   event.preventDefault();
   dragDepth = 0;
   editor.setDragOver(false);
-  const file = event.dataTransfer?.files?.[0];
-  if (file) void editor.loadPhoto(file);
+  const files = Array.from(event.dataTransfer?.files ?? []);
+  if (files.length) void editor.importFiles(files);
 });
 
 window.addEventListener('paste', (event) => {
   const items = event.clipboardData?.items;
   if (!items) return;
+  const files: File[] = [];
   for (const item of Array.from(items)) {
     if (!item.type.startsWith('image/')) continue;
     const file = item.getAsFile();
-    if (file) {
-      event.preventDefault();
-      void editor.loadPhoto(file);
-      return;
-    }
+    if (file) files.push(file);
   }
+  if (files.length === 0) return;
+  event.preventDefault();
+  void editor.importFiles(files);
 });
 
 // 跨断点时收起抽屉

@@ -1,6 +1,9 @@
 // 网页引擎：加载 framed_wasm.wasm（手写 C ABI，无 wasm-bindgen），
 // 打包格式见 docs/CONTRACT.md §3.2。
+// 多图模式：照片字节缓存在 JS 侧（Map<id, bytes>），切换时重新写入 wasm 线性内存。
 import type {
+  BatchExportItem,
+  BatchExportResult,
   Engine,
   ExportResult,
   FrameTemplate,
@@ -26,6 +29,12 @@ interface Packed {
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+let photoSequence = 0;
+
+function nextPhotoId(): string {
+  photoSequence += 1;
+  return `photo-${Date.now().toString(36)}-${photoSequence}`;
+}
 
 function parsePacked(exports: WasmExports, ptr: number): Packed {
   const buffer = exports.memory.buffer;
@@ -64,18 +73,45 @@ function withJson<T>(
   }
 }
 
+function downloadBlob(bytes: Uint8Array, filename: string, mime: string): void {
+  const blob = new Blob([bytes as unknown as BlobPart], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
 class WasmEngine implements Engine {
   readonly kind = 'wasm' as const;
 
   private exports: WasmExports;
   private imagePtr = 0;
   private imageLen = 0;
+  private photos = new Map<string, Uint8Array>();
+  private currentId: string | null = null;
 
   constructor(exports: WasmExports) {
     this.exports = exports;
   }
 
-  async loadImage(bytes: Uint8Array): Promise<PhotoInfo> {
+  async loadImage(bytes: Uint8Array, id: string = nextPhotoId()): Promise<PhotoInfo> {
+    const cached = bytes.slice();
+    this.photos.set(id, cached);
+    return this.activate(id, cached);
+  }
+
+  async selectImage(id: string, bytes?: Uint8Array): Promise<PhotoInfo> {
+    if (bytes) this.photos.set(id, bytes.slice());
+    const cached = this.photos.get(id);
+    if (!cached) throw new Error('照片不在内存中，请重新导入');
+    return this.activate(id, cached);
+  }
+
+  private activate(id: string, bytes: Uint8Array): PhotoInfo {
     this.releaseImage();
     const ptr = writeBytes(this.exports, bytes);
     this.imagePtr = ptr;
@@ -83,9 +119,11 @@ class WasmEngine implements Engine {
     try {
       const info = parsePacked(this.exports, this.exports.framed_probe(ptr, bytes.length))
         .json as unknown as PhotoInfo;
+      this.currentId = id;
       return info;
     } catch (err) {
       this.releaseImage();
+      this.currentId = null;
       throw err;
     }
   }
@@ -124,23 +162,29 @@ class WasmEngine implements Engine {
   }
 
   async exportImage(config: RenderConfig, suggestedName: string): Promise<ExportResult> {
-    const rendered = await this.render(
-      {
-        ...config,
-        output: { ...config.output, maxDim: config.output.maxDim },
-      },
-      false,
-    );
-    const format = config.output.format;
-    const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
-    const blob = new Blob([rendered.png as unknown as BlobPart], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = suggestedName;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    const rendered = await this.render(config, false);
+    const mime = config.output.format === 'jpeg' ? 'image/jpeg' : 'image/png';
+    downloadBlob(rendered.png, suggestedName, mime);
     return {};
+  }
+
+  async exportBatch(items: BatchExportItem[]): Promise<BatchExportResult> {
+    if (!this.currentId) throw new Error('尚未加载照片');
+    const current = this.currentId;
+    const paths: string[] = [];
+    for (const item of items) {
+      await this.selectImage(item.id);
+      const rendered = await this.render(item.config, false);
+      const mime = item.config.output.format === 'jpeg' ? 'image/jpeg' : 'image/png';
+      downloadBlob(rendered.png, item.filename, mime);
+      paths.push(item.filename);
+      // 浏览器对连续下载有节流，放慢一点更稳。
+      await sleep(420);
+    }
+    if (this.currentId !== current) {
+      await this.selectImage(current);
+    }
+    return { saved: paths.length, method: 'download', paths };
   }
 
   private releaseImage(): void {

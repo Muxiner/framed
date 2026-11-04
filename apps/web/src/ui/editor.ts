@@ -20,6 +20,81 @@ import { toast } from './toast';
 export type LoadStatus = 'boot' | 'empty' | 'loading' | 'ready';
 export type EngineLabel = 'WASM' | 'MOCK' | 'TAURI';
 
+/** 照片库上限 */
+export const LIBRARY_LIMIT = 16;
+
+export interface LibraryPhoto {
+  id: string;
+  name: string;
+  bytes: Uint8Array;
+  info: PhotoInfo;
+  thumbUrl: string;
+  config: RenderConfig;
+  template: FrameTemplate;
+}
+
+export interface ImportProgress {
+  done: number;
+  total: number;
+}
+
+interface ImportSource {
+  name: string;
+  bytes: Uint8Array;
+}
+
+let photoSequence = 0;
+
+function nextPhotoId(): string {
+  photoSequence += 1;
+  return `photo-${Date.now().toString(36)}-${photoSequence}`;
+}
+
+const IMAGE_FILE = /\.(jpe?g|png|webp|gif|tiff?|bmp|avif|heic|heif)$/i;
+
+function isImageFile(file: File): boolean {
+  return file.type.startsWith('image/') || IMAGE_FILE.test(file.name);
+}
+
+function sanitizeBaseName(name: string): string {
+  const withoutExtension = name.replace(/\.[a-zA-Z0-9]+$/, '');
+  const cleaned = withoutExtension
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\.+/, '');
+  return cleaned || 'photo';
+}
+
+function directoryOf(path: string): string {
+  const index = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  return index > 0 ? path.slice(0, index) : path;
+}
+
+/** 新照片继承当前照片的边框、水印文字、Logo、输出与网格，但 camera/gear/date 用新 EXIF。 */
+function inheritPhotoConfig(fresh: RenderConfig, base: RenderConfig | null): RenderConfig {
+  if (!base) return fresh;
+  const baseWatermark = base.blocks.find(
+    (block): block is TextBlock => block.type === 'text' && block.id === 'watermark',
+  );
+  const logos = base.blocks.filter((block): block is LogoBlock => block.type === 'logo');
+  const blocks: Block[] = fresh.blocks.map((block) =>
+    block.type === 'text' && block.id === 'watermark' && baseWatermark
+      ? { ...block, text: baseWatermark.text }
+      : block,
+  );
+  for (const logo of logos) {
+    if (!blocks.some((block) => block.id === logo.id)) blocks.push({ ...logo });
+  }
+  return {
+    ...fresh,
+    frame: { ...base.frame },
+    blocks,
+    grid: { ...base.grid },
+    output: { ...base.output },
+  };
+}
+
 export interface EditorState {
   status: LoadStatus;
   engineKind: 'wasm' | 'tauri' | null;
@@ -28,6 +103,9 @@ export interface EditorState {
   photo: PhotoInfo | null;
   photoName: string;
   photoThumb: string | null;
+  library: LibraryPhoto[];
+  activePhotoId: string | null;
+  importing: ImportProgress | null;
   config: RenderConfig | null;
   selectedId: string | null;
   bitmap: ImageBitmap | null;
@@ -42,6 +120,7 @@ export interface EditorState {
   exportOpen: boolean;
   exportName: string;
   dragOver: boolean;
+  dragCount: number;
   sampleBusy: boolean;
   canUndo: boolean;
   canRedo: boolean;
@@ -58,6 +137,9 @@ function initialState(): EditorState {
     photo: null,
     photoName: '',
     photoThumb: null,
+    library: [],
+    activePhotoId: null,
+    importing: null,
     config: null,
     selectedId: null,
     bitmap: null,
@@ -72,6 +154,7 @@ function initialState(): EditorState {
     exportOpen: false,
     exportName: '',
     dragOver: false,
+    dragCount: 0,
     sampleBusy: false,
     canUndo: false,
     canRedo: false,
@@ -209,6 +292,8 @@ export class Editor {
   private future: HistoryEntry[] = [];
   private burst: BurstState | null = null;
   private draggingBlock: string | null = null;
+  private photoOp: Promise<void> = Promise.resolve();
+  private importBusy = false;
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -219,6 +304,14 @@ export class Editor {
 
   private patch(partial: Partial<EditorState>): void {
     Object.assign(this.state, partial);
+    // 当前照片的配置改动即时回写到照片库，切换回来时不会丢编辑。
+    if (partial.config !== undefined && this.state.config && this.state.activePhotoId) {
+      const entry = this.state.library.find((item) => item.id === this.state.activePhotoId);
+      if (entry) {
+        entry.config = this.state.config;
+        entry.template = this.state.config.frame.template;
+      }
+    }
     for (const listener of this.listeners) listener(this.state);
   }
 
@@ -358,19 +451,38 @@ export class Editor {
     }
   }
 
-  // ---------------------------------------------------------------- 照片
+  // ---------------------------------------------------------------- 照片库 / 多图导入
+
+  private enqueuePhotoOp<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.photoOp.then(task, task);
+    this.photoOp = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  /** 把当前照片（若有）的 config/template 写回库，切换或导出前调用。 */
+  private saveActiveConfig(): void {
+    const { activePhotoId, config, library } = this.state;
+    if (!activePhotoId || !config) return;
+    const entry = library.find((item) => item.id === activePhotoId);
+    if (entry) {
+      entry.config = config;
+      entry.template = config.frame.template;
+    }
+  }
 
   async loadPhoto(file: File): Promise<void> {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    await this.loadBytes(bytes, file.name);
+    await this.importFiles([file]);
   }
 
   async loadSample(id: SampleId): Promise<void> {
-    if (this.state.sampleBusy) return;
+    if (this.state.sampleBusy || this.state.importing || this.importBusy) return;
     this.patch({ sampleBusy: true });
     try {
       const sample = await fetchSample(id);
-      await this.loadBytes(sample.bytes, sample.name);
+      await this.importSources([{ name: sample.name, bytes: sample.bytes }]);
       if (sample.generated) toast('示例照片尚未就绪，已使用生成的占位画面', 'info', 3800);
     } catch (error) {
       toast(`示例照片载入失败：${errorMessage(error)}`, 'error', 5000);
@@ -379,38 +491,154 @@ export class Editor {
     }
   }
 
-  private async loadBytes(bytes: Uint8Array, name: string): Promise<void> {
+  /** 拖拽 / 文件选择 / 粘贴的入口：过滤非图片、读取字节、批量导入。 */
+  async importFiles(files: File[]): Promise<void> {
+    if (this.state.importing || this.importBusy) {
+      toast('正在导入照片，请稍候', 'info', 2000);
+      return;
+    }
+    const imageFiles: File[] = [];
+    let skipped = 0;
+    for (const file of files) {
+      if (isImageFile(file)) imageFiles.push(file);
+      else skipped += 1;
+    }
+    if (imageFiles.length === 0) {
+      if (skipped > 0) toast(`已忽略 ${skipped} 个非图片文件`, 'info', 3200);
+      return;
+    }
+    const capacity = Math.max(0, LIBRARY_LIMIT - this.state.library.length);
+    if (capacity === 0) {
+      toast(`照片库已满（最多 ${LIBRARY_LIMIT} 张），本次跳过 ${imageFiles.length} 张`, 'info', 4400);
+      return;
+    }
+    // 先按剩余容量裁剪，避免一次性把上百张照片字节读进内存。
+    const selected = imageFiles.slice(0, capacity);
+    const overLimit = imageFiles.length - selected.length;
+    this.importBusy = true;
+    try {
+      const sources: ImportSource[] = [];
+      let failedRead = 0;
+      for (const file of selected) {
+        try {
+          sources.push({
+            name: file.name || 'photo',
+            bytes: new Uint8Array(await file.arrayBuffer()),
+          });
+        } catch {
+          failedRead += 1;
+        }
+      }
+      await this.importSources(sources, { skipped, failedRead, overLimit });
+    } finally {
+      this.importBusy = false;
+    }
+  }
+
+  private async importSources(
+    sources: ImportSource[],
+    counts: { skipped?: number; failedRead?: number; overLimit?: number } = {},
+  ): Promise<void> {
     const engine = this.engine;
     if (!engine) {
       toast('渲染引擎尚未就绪，请稍后重试', 'error');
       return;
     }
-    const previous = this.state.config;
-    const hadPhoto = this.state.photo !== null;
-    this.patch({
-      status: hadPhoto ? 'ready' : 'loading',
-      rendering: true,
-      renderError: null,
-      photoName: name,
+    if (sources.length === 0) {
+      if (counts.failedRead) toast('照片读取失败，请重试', 'error', 4200);
+      return;
+    }
+    this.endCoalescedEdit();
+    return this.enqueuePhotoOp(async () => {
+      const capacity = Math.max(0, LIBRARY_LIMIT - this.state.library.length);
+      const accepted = sources.slice(0, capacity);
+      const overLimit = sources.length - accepted.length + (counts.overLimit ?? 0);
+      if (accepted.length === 0) {
+        toast(`照片库已满（最多 ${LIBRARY_LIMIT} 张），本次跳过 ${sources.length} 张`, 'info', 4400);
+        return;
+      }
+      // 继承导入前当前照片的视觉配置（模板/边框/水印文字/Logo/output/grid）。
+      const baseConfig = this.state.config;
+      const template = baseConfig?.frame.template ?? this.state.template;
+      if (!this.state.photo) this.patch({ status: 'loading' });
+      this.patch({ importing: { done: 0, total: accepted.length } });
+      const added: LibraryPhoto[] = [];
+      let failed = 0;
+      for (let index = 0; index < accepted.length; index += 1) {
+        const source = accepted[index];
+        if (!source) continue;
+        try {
+          const id = nextPhotoId();
+          const info = await engine.loadImage(source.bytes, id);
+          const fresh = await engine.defaultConfig(info, template);
+          const config = inheritPhotoConfig(fresh, baseConfig);
+          const thumbUrl = URL.createObjectURL(
+            new Blob([source.bytes as unknown as BlobPart], {
+              type: guessMime(source.bytes, source.name),
+            }),
+          );
+          const entry: LibraryPhoto = {
+            id,
+            name: source.name || 'photo',
+            bytes: source.bytes,
+            info,
+            thumbUrl,
+            config,
+            template,
+          };
+          added.push(entry);
+          this.patch({
+            library: [...this.state.library, entry],
+            importing: { done: index + 1, total: accepted.length },
+          });
+        } catch (error) {
+          failed += 1;
+          this.patch({ importing: { done: index + 1, total: accepted.length } });
+          console.warn('[framed] 照片导入失败', source.name, error);
+        }
+      }
+      this.patch({ importing: null });
+
+      if (added.length === 0) {
+        if (!this.state.photo) this.patch({ status: 'empty' });
+        toast('照片导入失败，请检查文件格式', 'error', 5200);
+        return;
+      }
+
+      const first = added[0];
+      if (first) await this.activateEntry(first);
+
+      const notes: string[] = [`已导入 ${added.length} 张照片`];
+      if (counts.skipped) notes.push(`跳过 ${counts.skipped} 个非图片文件`);
+      if (counts.failedRead) notes.push(`${counts.failedRead} 个文件读取失败`);
+      if (failed > 0) notes.push(`${failed} 张解析失败`);
+      if (overLimit > 0) notes.push(`超过 ${LIBRARY_LIMIT} 张上限跳过 ${overLimit} 张`);
+      const hasWarning = Boolean(counts.skipped || counts.failedRead || failed || overLimit);
+      toast(notes.join(' · '), hasWarning ? 'info' : 'success', 4600);
     });
+  }
+
+  /** 激活库中的某张照片（调用方需在 photoOp 队列里）。 */
+  private async activateEntry(entry: LibraryPhoto): Promise<void> {
+    const engine = this.engine;
+    if (!engine) return;
+    this.endCoalescedEdit();
+    this.saveActiveConfig();
+    if (this.state.activePhotoId === entry.id && this.state.photo) return;
+    const previousBitmap = this.state.bitmap;
+    this.seq += 1;
+    this.patch({ status: 'loading', rendering: true, renderError: null });
     try {
-      const photo = await engine.loadImage(bytes);
-      const template = this.state.template;
-      const fresh = await engine.defaultConfig(photo, template);
-      const config = mergeConfig(fresh, previous, {
-        preserveTextIds: ['watermark'],
-        preserveLogo: true,
-        preserveGrid: true,
-        preserveOutput: true,
-      });
-      const oldThumb = this.state.photoThumb;
-      const thumb = URL.createObjectURL(new Blob([bytes as unknown as BlobPart], { type: guessMime(bytes, name) }));
-      if (oldThumb && oldThumb.startsWith('blob:')) URL.revokeObjectURL(oldThumb);
+      const info = await engine.selectImage(entry.id, entry.bytes);
+      entry.info = info;
+      this.seq += 1;
       this.patch({
-        photo,
-        photoName: name,
-        photoThumb: thumb,
-        config,
+        photo: info,
+        photoName: entry.name,
+        photoThumb: entry.thumbUrl,
+        config: entry.config,
+        template: entry.template,
+        activePhotoId: entry.id,
         selectedId: null,
         meta: null,
         bitmap: null,
@@ -418,12 +646,124 @@ export class Editor {
         zoom: 'fit',
       });
       this.resetHistory();
+      previousBitmap?.close();
       await this.renderPreview();
     } catch (error) {
-      this.patch({ rendering: false });
-      toast(`无法载入照片：${errorMessage(error)}`, 'error', 5200);
-      if (!hadPhoto) this.patch({ status: 'empty' });
+      this.patch({ status: this.state.photo ? 'ready' : 'empty', rendering: false });
+      toast(`切换照片失败：${errorMessage(error)}`, 'error', 5200);
     }
+  }
+
+  async switchPhoto(id: string): Promise<void> {
+    if (this.state.importing) {
+      toast('正在导入照片，请稍候', 'info', 2000);
+      return;
+    }
+    if (this.state.activePhotoId === id) return;
+    const entry = this.state.library.find((item) => item.id === id);
+    if (!entry) return;
+    await this.enqueuePhotoOp(() => this.activateEntry(entry));
+  }
+
+  async deletePhoto(id: string): Promise<void> {
+    if (this.state.importing) {
+      toast('正在导入照片，请稍候', 'info', 2000);
+      return;
+    }
+    const index = this.state.library.findIndex((item) => item.id === id);
+    const entry = this.state.library[index];
+    if (!entry) return;
+    const wasActive = this.state.activePhotoId === id;
+    const remaining = this.state.library.filter((item) => item.id !== id);
+    this.patch({ library: remaining });
+
+    if (!wasActive) {
+      URL.revokeObjectURL(entry.thumbUrl);
+      toast('已删除 1 张照片', 'info', 1800);
+      return;
+    }
+
+    if (remaining.length === 0) {
+      URL.revokeObjectURL(entry.thumbUrl);
+      this.clearActiveState(false);
+      toast('照片库已清空', 'info', 2600);
+      return;
+    }
+
+    const next = remaining[Math.min(index, remaining.length - 1)];
+    if (!next) return;
+    const previousBitmap = this.state.bitmap;
+    this.seq += 1;
+    this.patch({ status: 'loading', bitmap: null, meta: null, selectedId: null });
+    previousBitmap?.close();
+    await this.enqueuePhotoOp(async () => {
+      await this.activateEntry(next);
+      URL.revokeObjectURL(entry.thumbUrl);
+      if (this.state.photoThumb !== next.thumbUrl) this.patch({ photoThumb: next.thumbUrl });
+    });
+    toast('已删除照片', 'info', 1800);
+  }
+
+  clearLibrary(): void {
+    if (this.state.importing) {
+      toast('正在导入照片，请稍候', 'info', 2000);
+      return;
+    }
+    if (this.state.library.length === 0) return;
+    for (const entry of this.state.library) URL.revokeObjectURL(entry.thumbUrl);
+    this.clearActiveState(false);
+    this.patch({ library: [] });
+    toast('已清空照片库', 'info', 2600);
+  }
+
+  private clearActiveState(revokeThumb: boolean): void {
+    const previousBitmap = this.state.bitmap;
+    const thumb = this.state.photoThumb;
+    if (revokeThumb && thumb && thumb.startsWith('blob:')) URL.revokeObjectURL(thumb);
+    if (this.raf) {
+      cancelAnimationFrame(this.raf);
+      this.raf = 0;
+    }
+    this.seq += 1;
+    this.patch({
+      photo: null,
+      photoName: '',
+      photoThumb: null,
+      config: null,
+      activePhotoId: null,
+      selectedId: null,
+      bitmap: null,
+      meta: null,
+      status: 'empty',
+      rendering: false,
+      renderError: null,
+      importing: null,
+      zoom: 'fit',
+      exportOpen: false,
+    });
+    previousBitmap?.close();
+    this.resetHistory();
+  }
+
+  /** 把当前边框参数复制到照片库中的所有照片（当前照片已经是最新）。 */
+  applyFrameToAll(): void {
+    const config = this.state.config;
+    const count = this.state.library.length;
+    if (!config || count < 2) return;
+    this.endCoalescedEdit();
+    this.saveActiveConfig();
+    const frame = { ...config.frame };
+    const library = this.state.library.map((entry) =>
+      entry.id === this.state.activePhotoId
+        ? entry
+        : {
+            ...entry,
+            template: frame.template,
+            config: { ...entry.config, frame: { ...frame } },
+          },
+    );
+    this.patch({ library });
+    toast(`边框已应用到全部 ${count} 张照片`, 'success', 2800);
   }
 
   // ---------------------------------------------------------------- 模板 / 边框
@@ -705,9 +1045,10 @@ export class Editor {
     this.patch({ exportName: name });
   }
 
-  setDragOver(over: boolean): void {
-    if (this.state.dragOver === over) return;
-    this.patch({ dragOver: over });
+  setDragOver(over: boolean, count = 0): void {
+    const nextCount = over ? Math.max(1, count) : 0;
+    if (this.state.dragOver === over && this.state.dragCount === nextCount) return;
+    this.patch({ dragOver: over, dragCount: nextCount });
   }
 
   private exportFilename(): string {
@@ -723,6 +1064,8 @@ export class Editor {
     const engine = this.engine;
     const config = this.state.config;
     if (!engine || !config || this.state.exporting) return;
+    this.endCoalescedEdit();
+    this.saveActiveConfig();
     this.patch({ exporting: true });
     const filename = this.exportFilename();
     try {
@@ -736,6 +1079,46 @@ export class Editor {
       this.patch({ exportOpen: false });
     } catch (error) {
       toast(`导出失败：${errorMessage(error)}`, 'error', 5200);
+    } finally {
+      this.patch({ exporting: false });
+    }
+  }
+
+  /** 批量导出照片库（使用每张照片自己的 config/output 设置）。 */
+  async exportAll(): Promise<void> {
+    const engine = this.engine;
+    const library = [...this.state.library];
+    if (!engine || library.length === 0 || this.state.exporting) return;
+    this.endCoalescedEdit();
+    this.saveActiveConfig();
+    this.patch({ exporting: true });
+    try {
+      const used = new Set<string>();
+      const items = library.map((entry) => {
+        const format = entry.config.output.format;
+        const extension = format === 'jpeg' ? 'jpg' : 'png';
+        const base = sanitizeBaseName(entry.name);
+        let filename = `${base}-framed.${extension}`;
+        let suffix = 2;
+        while (used.has(filename.toLowerCase())) {
+          filename = `${base}-framed-${suffix}.${extension}`;
+          suffix += 1;
+        }
+        used.add(filename.toLowerCase());
+        return { id: entry.id, filename, config: structuredClone(entry.config) };
+      });
+      const result = await this.enqueuePhotoOp(() => engine.exportBatch(items));
+      if (result.canceled) {
+        toast('已取消批量导出', 'info', 2600);
+      } else if (engine.kind === 'tauri') {
+        const directory = result.paths?.[0] ? directoryOf(result.paths[0]) : '';
+        toast(`已导出 ${result.saved} 张照片${directory ? ` · ${directory}` : ''}`, 'success', 5200);
+      } else {
+        toast(`已导出 ${result.saved} 张照片 · 浏览器可能询问多个下载`, 'success', 5200);
+      }
+      this.patch({ exportOpen: false });
+    } catch (error) {
+      toast(`批量导出失败：${errorMessage(error)}`, 'error', 5600);
     } finally {
       this.patch({ exporting: false });
     }

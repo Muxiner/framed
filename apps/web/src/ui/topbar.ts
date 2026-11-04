@@ -46,6 +46,7 @@ export class Topbar {
   private readonly maxDimField: SegmentedHandle<MaxDimKey>;
   private readonly nameInput: HTMLInputElement;
   private readonly popoverExport: HTMLButtonElement;
+  private readonly exportAllButton: HTMLButtonElement;
   private readonly popoverFormatHint: HTMLElement;
   private lastExporting = false;
 
@@ -202,6 +203,13 @@ export class Topbar {
       className: 'btn-accent btn-block',
       onClick: () => void editor.exportNow(),
     });
+    this.exportAllButton = textButton('导出全部', {
+      icon: 'download',
+      className: 'btn-block btn-ghost export-all-btn',
+      title: '导出照片库中的全部照片',
+      onClick: () => void editor.exportAll(),
+    });
+    this.exportAllButton.hidden = true;
 
     const popoverClose = iconButton({
       name: 'close',
@@ -232,6 +240,7 @@ export class Topbar {
         ]),
         this.popoverFormatHint,
         this.popoverExport,
+        this.exportAllButton,
       ],
     );
 
@@ -274,13 +283,15 @@ export class Topbar {
       state.renderMs >= 1000 ? `${(state.renderMs / 1000).toFixed(1)}s` : `${state.renderMs}ms`;
     const statusLabel = state.status === 'boot'
       ? '启动中'
-      : state.renderError
-        ? '渲染错误'
-        : state.rendering
-          ? '渲染中'
-          : state.photo
-            ? `就绪${state.renderMs > 0 ? ` · ${renderTime}` : ''}`
-            : '待载入';
+      : state.importing
+        ? `导入中 ${state.importing.done}/${state.importing.total}`
+        : state.renderError
+          ? '渲染错误'
+          : state.rendering
+            ? '渲染中'
+            : state.photo
+              ? `就绪${state.renderMs > 0 ? ` · ${renderTime}` : ''}`
+              : '待载入';
     setText(this.statusText, statusLabel);
     this.statusWrap.title =
       state.engineLabel === 'MOCK'
@@ -325,6 +336,11 @@ export class Topbar {
       const extension = output.format === 'jpeg' ? 'jpg' : 'png';
       const base = state.exportName.trim().replace(/\.[a-zA-Z0-9]+$/, '') || defaultNameHint();
       setText(this.popoverFormatHint, `将输出 ${base}.${extension} · ${output.maxDim === 0 ? '原图尺寸' : `长边 ${output.maxDim}px`}`);
+      const libraryCount = state.library.length;
+      this.exportAllButton.hidden = libraryCount < 2;
+      this.exportAllButton.disabled = state.exporting;
+      const exportAllLabel = this.exportAllButton.querySelector('span');
+      if (exportAllLabel) setText(exportAllLabel, `导出全部（${libraryCount} 张）`);
       this.popoverExport.disabled = state.exporting;
       if (this.lastExporting !== state.exporting) {
         this.lastExporting = state.exporting;

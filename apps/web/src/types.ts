@@ -112,12 +112,38 @@ export interface ExportResult {
   path?: string;
 }
 
+/** 批量导出的一项：照片 id + 输出文件名 + 该照片自己的配置。 */
+export interface BatchExportItem {
+  id: string;
+  filename: string;
+  config: RenderConfig;
+}
+
+export interface BatchExportResult {
+  saved: number;
+  /** 网页端逐个下载；桌面端弹一次目录选择框写入。 */
+  method: 'download' | 'folder';
+  paths?: string[];
+  canceled?: boolean;
+}
+
 export interface Engine {
   readonly kind: 'wasm' | 'tauri';
-  loadImage(bytes: Uint8Array): Promise<PhotoInfo>;
+  /**
+   * 载入照片并缓存为 `id`（不传 id 时自动生成）。
+   * 多图模式下每张照片只在这里上传一次。
+   */
+  loadImage(bytes: Uint8Array, id?: string): Promise<PhotoInfo>;
+  /**
+   * 切换到已载入的照片。wasm 端需要再次传入 bytes（内部有缓存，传了会更新）；
+   * 桌面端由原生侧按 id 取缓存，不会重复传输图片。
+   */
+  selectImage(id: string, bytes?: Uint8Array): Promise<PhotoInfo>;
   defaultConfig(photo: PhotoInfo, template: FrameTemplate): Promise<RenderConfig>;
   render(config: RenderConfig, preview: boolean): Promise<RenderResult>;
   exportImage(config: RenderConfig, suggestedName: string): Promise<ExportResult>;
+  /** 批量导出：网页端逐张下载，桌面端选目录后一次写入。 */
+  exportBatch(items: BatchExportItem[]): Promise<BatchExportResult>;
 }
 
 export const TEMPLATE_LABELS: Record<FrameTemplate, string> = {
