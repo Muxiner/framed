@@ -157,6 +157,8 @@ export interface EditorState {
   selectedId: string | null;
   /** 多选：包含主选中（selectedId）在内的全部选中块 id。 */
   selectedIds: string[];
+  /** 最近套用的品牌样式 id（用于高亮卡片；手动改参数后清空）。 */
+  activeStyleId: string | null;
   bitmap: ImageBitmap | null;
   meta: RenderMeta | null;
   rendering: boolean;
@@ -195,6 +197,7 @@ function initialState(): EditorState {
     config: null,
     selectedId: null,
     selectedIds: [],
+    activeStyleId: null,
     bitmap: null,
     meta: null,
     rendering: false,
@@ -360,7 +363,32 @@ export class Editor {
   }
 
   private patch(partial: Partial<EditorState>): void {
-    Object.assign(this.state, partial);
+    let next = partial;
+    // 保持 selectedId / selectedIds 一致，并清理已被删除的块。
+    if (next.config) {
+      const ids = new Set(next.config.blocks.map((block) => block.id));
+      const kept = this.state.selectedIds.filter((id) => ids.has(id));
+      const primary =
+        next.selectedId !== undefined
+          ? next.selectedId
+          : this.state.selectedId && ids.has(this.state.selectedId)
+            ? this.state.selectedId
+            : kept[kept.length - 1] ?? null;
+      if (
+        kept.length !== this.state.selectedIds.length ||
+        (next.selectedId === undefined && primary !== this.state.selectedId)
+      ) {
+        next = { ...next, selectedIds: kept, selectedId: primary };
+      }
+    }
+    if (next.selectedId !== undefined && next.selectedIds === undefined) {
+      next = { ...next, selectedIds: next.selectedId ? [next.selectedId] : [] };
+    }
+    // 手动改参数后不再高亮品牌样式卡片。
+    if (next.config && next.activeStyleId === undefined && this.state.activeStyleId !== null) {
+      next = { ...next, activeStyleId: null };
+    }
+    Object.assign(this.state, next);
     // 当前照片的配置改动即时回写到照片库，切换回来时不会丢编辑。
     if (partial.config !== undefined && this.state.config && this.state.activePhotoId) {
       const entry = this.state.library.find((item) => item.id === this.state.activePhotoId);
@@ -902,6 +930,7 @@ export class Editor {
         activePhotoId: entry.id,
         selectedId: null,
     selectedIds: [],
+    activeStyleId: null,
         meta: null,
         bitmap: null,
         status: 'ready',
@@ -1010,6 +1039,7 @@ export class Editor {
       activePhotoId: null,
       selectedId: null,
     selectedIds: [],
+    activeStyleId: null,
       bitmap: null,
       meta: null,
       status: 'empty',
@@ -1112,6 +1142,7 @@ export class Editor {
       this.patch({
         config: next,
         template: next.frame.template,
+        activeStyleId: style.id,
         selectedIds,
         selectedId: selectedIds.includes(this.state.selectedId ?? '')
           ? this.state.selectedId

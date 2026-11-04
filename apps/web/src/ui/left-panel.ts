@@ -127,7 +127,7 @@ export class LeftPanel {
   private shadowOpacityField!: SliderHandle;
   private shadowColorField!: ColorHandle;
   private shadowParams!: HTMLElement;
-  private brandCards: HTMLButtonElement[] = [];
+  private brandCards: { card: HTMLButtonElement; id: string }[] = [];
   private applyAllButton!: HTMLButtonElement;
 
   private blocksSection!: SectionHandle;
@@ -531,6 +531,19 @@ export class LeftPanel {
 
     const brandStrip = h('div', { class: 'brand-style-strip', role: 'group', ariaLabel: '品牌样式' });
     for (const style of BRAND_STYLES) {
+      const mini = h('span', { class: 'brand-mini', ariaHidden: true }, [
+        h('img', {
+          class: 'brand-mini-img',
+          attrs: {
+            src: `/brand-previews/${style.id}.jpg`,
+            alt: '',
+            loading: 'lazy',
+            decoding: 'async',
+          },
+        }),
+      ]);
+      mini.style.background = style.preview.background;
+
       const card = h(
         'button',
         {
@@ -540,14 +553,17 @@ export class LeftPanel {
           attrs: { type: 'button' },
         },
         [
-          h('span', { class: 'brand-swatch', ariaHidden: true }),
-          h('span', { class: 'brand-name', text: style.name }),
-          h('span', { class: 'brand-tag', text: style.tagline }),
+          mini,
+          h('span', { class: 'brand-card-info' }, [
+            h('span', { class: 'brand-name', text: style.name }),
+            h('span', { class: 'brand-tag', text: style.tagline }),
+          ]),
         ],
       );
       card.style.setProperty('--brand', style.accent);
+      card.dataset.styleId = style.id;
       card.addEventListener('click', () => void this.editor.applyBrandStyle(style));
-      this.brandCards.push(card);
+      this.brandCards.push({ card, id: style.id });
       brandStrip.append(card);
     }
 
@@ -1104,7 +1120,10 @@ export class LeftPanel {
       this.shadowColorField.setValue(photoShadow.color);
       this.shadowParams.hidden = !photoShadow.enabled;
     }
-    for (const card of this.brandCards) card.disabled = !hasFrame;
+    for (const entry of this.brandCards) {
+      entry.card.disabled = !hasFrame;
+      toggleClass(entry.card, 'is-active', state.activeStyleId === entry.id);
+    }
 
     // 内容块
     this.syncBlocks(state);
