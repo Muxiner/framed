@@ -2469,7 +2469,9 @@ kbd {
   color: var(--text-dim);
   font-size: 11.5px;
   backdrop-filter: blur(10px);
-  animation: toast-in 0.22s cubic-bezier(0.2, 0.7, 0.3, 1);
+  transform-origin: 50% 100%;
+  will-change: transform, opacity;
+  animation: toast-in 0.34s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .toast-ico {
   display: flex;
@@ -2492,7 +2494,17 @@ kbd {
   -webkit-box-orient: vertical;
 }
 .toast.is-leaving {
-  animation: toast-out 0.2s forwards;
+  animation: toast-out 0.18s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+  .toast.is-leaving {
+    animation: none;
+    opacity: 0;
+  }
 }
 
 /* =========================================================================== 自定义预设弹层 */
@@ -3016,17 +3028,20 @@ kbd {
 @keyframes toast-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(14px) scale(0.965);
+  }
+  60% {
+    opacity: 1;
   }
   to {
     opacity: 1;
-    transform: none;
+    transform: translateY(0) scale(1);
   }
 }
 @keyframes toast-out {
   to {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(7px) scale(0.985);
   }
 }
 @keyframes boot-sweep {
@@ -3338,4 +3353,52 @@ body.is-photo-dragging {
 .color-swatch.is-active {
   box-shadow: 0 0 0 2px var(--accent);
   border-color: transparent;
+}
+
+/* =========================================================================== 颜色主题 */
+.color-themes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin: 0 0 8px;
+}
+.color-theme {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 5px 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: #121110;
+  color: var(--muted);
+  font-size: 9px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.14s, background 0.14s, color 0.14s;
+}
+.color-theme:hover {
+  border-color: rgba(229, 181, 103, 0.4);
+  color: var(--text);
+}
+.color-theme.is-active {
+  border-color: var(--accent);
+  background: rgba(229, 181, 103, 0.07);
+  color: var(--text);
+}
+.theme-dots {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+.theme-dot {
+  width: 7px;
+  height: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+}
+.theme-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }

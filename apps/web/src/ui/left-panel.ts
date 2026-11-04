@@ -35,6 +35,7 @@ import {
 import { formatFontDate, formatFontSize, type CustomFontMeta } from './fonts';
 import { icon } from './icons';
 import { BRAND_STYLES } from './brand-styles';
+import { COLOR_THEMES } from './color-themes';
 import { LibraryReorder } from './library-reorder';
 import { PresetDialog } from './preset-dialog';
 import { SAMPLES, sampleThumb, sampleUrl, type SampleId } from './samples';
@@ -125,7 +126,10 @@ export class LeftPanel {
   private brandWordSizeField!: SliderHandle;
   private brandTagColorField!: ColorHandle;
   private brandTagSizeField!: SliderHandle;
+  private brandWordFontField!: SegmentedHandle<'sans' | 'mono' | 'cjk'>;
+  private brandTagFontField!: SegmentedHandle<'sans' | 'mono' | 'cjk'>;
   private brandTextDetails!: HTMLDetailsElement;
+  private themeButtons = new Map<string, HTMLButtonElement>();
   private paramSwatches = new Map<string, HTMLButtonElement>();
   private readonly paramColors = [
     '#ffffff',
@@ -608,6 +612,36 @@ export class LeftPanel {
       value: '#5f5a52',
       onChange: (value) => this.editor.setParameterStyle({ color: value }),
     });
+    const themeRow = h('div', {
+      class: 'color-themes',
+      role: 'group',
+      ariaLabel: '颜色主题',
+    });
+    for (const theme of COLOR_THEMES) {
+      const dots = h('span', { class: 'theme-dots', ariaHidden: true }, [
+        h('span', { class: 'theme-dot' }),
+        h('span', { class: 'theme-dot' }),
+        h('span', { class: 'theme-dot' }),
+      ]);
+      const dotEls = dots.querySelectorAll<HTMLElement>('.theme-dot');
+      dotEls[0]?.style.setProperty('background', theme.paramColor);
+      dotEls[1]?.style.setProperty('background', theme.brandColor);
+      dotEls[2]?.style.setProperty('background', theme.background);
+      const chip = h(
+        'button',
+        {
+          class: 'color-theme',
+          title: `${theme.name} · 参数 ${theme.paramColor} / 字标 ${theme.brandColor} / 底色 ${theme.background}`,
+          ariaLabel: `应用颜色主题：${theme.name}`,
+          attrs: { type: 'button' },
+        },
+        [dots, h('span', { class: 'theme-name', text: theme.name })],
+      );
+      chip.addEventListener('click', () => this.editor.applyColorTheme(theme));
+      this.themeButtons.set(theme.id, chip);
+      themeRow.append(chip);
+    }
+
     const paramSwatches = h('div', {
       class: 'color-swatches',
       role: 'group',
@@ -673,13 +707,37 @@ export class LeftPanel {
       ariaLabel: '品牌副标大小',
       onInput: (value) => this.editor.setBrandTextStyle('tagline', { size: value }),
     });
+    this.brandWordFontField = segmentedField<'sans' | 'mono' | 'cjk'>({
+      label: '字标字体',
+      options: [
+        { value: 'sans', label: '无衬线' },
+        { value: 'mono', label: '等宽' },
+        { value: 'cjk', label: '中文' },
+      ],
+      value: 'sans',
+      ariaLabel: '品牌字标字体',
+      onChange: (value) => this.editor.setBrandTextStyle('wordmark', { font: value }),
+    });
+    this.brandTagFontField = segmentedField<'sans' | 'mono' | 'cjk'>({
+      label: '副标字体',
+      options: [
+        { value: 'sans', label: '无衬线' },
+        { value: 'mono', label: '等宽' },
+        { value: 'cjk', label: '中文' },
+      ],
+      value: 'mono',
+      ariaLabel: '品牌副标字体',
+      onChange: (value) => this.editor.setBrandTextStyle('tagline', { font: value }),
+    });
     this.brandTextDetails = h('details', { class: 'brand-text-adjust' }, [
       h('summary', { text: '单独调整字标 / 副标' }),
       h('div', { class: 'brand-text-adjust-body' }, [
         this.brandWordColorField.root,
         this.brandWordSizeField.root,
+        this.brandWordFontField.root,
         this.brandTagColorField.root,
         this.brandTagSizeField.root,
+        this.brandTagFontField.root,
       ]),
     ]);
 
@@ -792,7 +850,10 @@ export class LeftPanel {
         this.backgroundField.root,
         this.radiusField.root,
         this.paramSizeField.root,
+        h('p', { class: 'sec-mini-label mono', text: '颜色主题' }),
+        themeRow,
         this.paramColorField.root,
+        h('p', { class: 'sec-mini-label mono', text: '参数色' }),
         paramSwatches,
         this.paramWeightField.root,
         this.holesRow,
@@ -1285,8 +1346,10 @@ export class LeftPanel {
       this.brandToggle.setValue(watermarkVisible.visible);
       this.brandWordColorField.setValue(watermarkVisible.color);
       this.brandWordSizeField.setValue(watermarkVisible.size);
+      this.brandWordFontField.setValue(watermarkVisible.font);
       this.brandWordColorField.setDisabled(!hasBrandBlocks);
       this.brandWordSizeField.setDisabled(!hasBrandBlocks);
+      this.brandWordFontField.setDisabled(!hasBrandBlocks);
     }
     const taglineBlock = config?.blocks.find(
       (block) => block.id === 'tagline' && block.type === 'text',
@@ -1294,11 +1357,26 @@ export class LeftPanel {
     if (taglineBlock && taglineBlock.type === 'text') {
       this.brandTagColorField.setValue(taglineBlock.color);
       this.brandTagSizeField.setValue(taglineBlock.size);
+      this.brandTagFontField.setValue(taglineBlock.font);
       this.brandTagColorField.setDisabled(false);
       this.brandTagSizeField.setDisabled(false);
+      this.brandTagFontField.setDisabled(false);
     } else {
       this.brandTagColorField.setDisabled(true);
       this.brandTagSizeField.setDisabled(true);
+      this.brandTagFontField.setDisabled(true);
+    }
+    const background = frame?.background;
+    for (const [id, chip] of this.themeButtons) {
+      const theme = COLOR_THEMES.find((item) => item.id === id);
+      const active =
+        theme !== undefined &&
+        cameraBlock?.type === 'text' &&
+        cameraBlock.color === theme.paramColor &&
+        watermarkVisible?.type === 'text' &&
+        watermarkVisible.color === theme.brandColor &&
+        background === theme.background;
+      toggleClass(chip, 'is-active', active);
     }
     for (const [color, swatch] of this.paramSwatches) {
       toggleClass(swatch, 'is-active', cameraBlock?.type === 'text' && cameraBlock.color === color);

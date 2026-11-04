@@ -26,11 +26,44 @@ function ensureContainer(): HTMLElement {
   return container;
 }
 
+/** 旧 toast 让位时用 FLIP 平滑移动，避免整列硬跳。 */
+function animateShift(before: Map<HTMLElement, DOMRect>): void {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  window.requestAnimationFrame(() => {
+    for (const [el, rect] of before) {
+      if (!el.isConnected) continue;
+      const next = el.getBoundingClientRect();
+      const delta = rect.top - next.top;
+      if (Math.abs(delta) < 0.5) continue;
+      el.animate(
+        [
+          { transform: `translateY(${delta}px)` },
+          { transform: 'translateY(0)' },
+        ],
+        {
+          duration: 320,
+          easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+        },
+      );
+    }
+  });
+}
+
+function snapshot(): Map<HTMLElement, DOMRect> {
+  const map = new Map<HTMLElement, DOMRect>();
+  for (const entry of active) map.set(entry.el, entry.el.getBoundingClientRect());
+  return map;
+}
+
 function remove(entry: ToastEntry): void {
   const index = active.indexOf(entry);
   if (index >= 0) active.splice(index, 1);
   entry.el.classList.add('is-leaving');
-  window.setTimeout(() => entry.el.remove(), 200);
+  window.setTimeout(() => {
+    const before = snapshot();
+    entry.el.remove();
+    animateShift(before);
+  }, 180);
 }
 
 export function dismissToasts(): void {
@@ -51,7 +84,9 @@ export function toast(message: string, kind: ToastKind = 'info', duration = 3200
     h('span', { class: 'toast-ico', html: icon(iconName, 14) }),
     h('span', { class: 'toast-msg', text: message }),
   ]);
+  const before = snapshot();
   root.append(el);
+  animateShift(before);
   while (active.length >= MAX_VISIBLE) {
     const oldest = active[0];
     if (oldest) remove(oldest);

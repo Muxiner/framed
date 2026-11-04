@@ -1265,10 +1265,10 @@ export class Editor {
     this.scheduleRender();
   }
 
-  /** 单独调整品牌字标 / 副标的颜色与字号。 */
+  /** 单独调整品牌字标 / 副标的颜色、字号与字体。 */
   setBrandTextStyle(
     target: 'wordmark' | 'tagline',
-    patch: { color?: string; size?: number },
+    patch: { color?: string; size?: number; font?: 'sans' | 'mono' | 'cjk' },
   ): void {
     const config = this.state.config;
     if (!config) return;
@@ -1288,11 +1288,49 @@ export class Editor {
         changed = true;
       }
     }
+    if (patch.font !== undefined && next.font !== patch.font) {
+      next.font = patch.font;
+      next.customFont = null;
+      changed = true;
+    }
     if (!changed) return;
     this.beginEdit(`brand:${target}`, 'idle', 600);
     const blocks = config.blocks.map((item) => (item.id === id ? next : item));
     this.patch({ config: { ...config, blocks } });
     this.scheduleRender();
+  }
+
+  /** 颜色主题：参数色 + 品牌字标色 + 边框底色 一次设置。 */
+  applyColorTheme(theme: { name: string; paramColor: string; brandColor: string; background: string }): void {
+    const config = this.state.config;
+    if (!config) return;
+    const params = new Set(['camera', 'gear', 'date']);
+    let changed = false;
+    const blocks = config.blocks.map((block) => {
+      if (block.type !== 'text') return block;
+      if (params.has(block.id) && block.color !== theme.paramColor) {
+        changed = true;
+        return { ...block, color: theme.paramColor };
+      }
+      if (block.id === 'watermark' && block.color !== theme.brandColor) {
+        changed = true;
+        return { ...block, color: theme.brandColor };
+      }
+      return block;
+    });
+    const backgroundChanged = config.frame.background !== theme.background;
+    if (!changed && !backgroundChanged) return;
+    this.beginEdit('theme:color', 'manual');
+    this.patch({
+      config: {
+        ...config,
+        frame: backgroundChanged ? { ...config.frame, background: theme.background } : config.frame,
+        blocks,
+      },
+    });
+    this.scheduleRender();
+    this.endCoalescedEdit();
+    toast(`已应用「${theme.name}」颜色主题`, 'success', 2400);
   }
 
   /** 显示/隐藏品牌字标与副标（保留参数排版）。 */
