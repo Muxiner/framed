@@ -62,6 +62,7 @@ interface TextSpec {
   align?: TextBlock['align'];
   alignY?: TextBlock['alignY'];
   opacity?: number;
+  visible?: boolean;
 }
 
 function applySpec(block: TextBlock, spec: TextSpec): TextBlock {
@@ -177,13 +178,13 @@ function buildStyle(
   const positioned = bandText(layout, frame, photo);
   const blocks: Block[] = base.blocks.map((block) => {
     if (block.type !== 'text') return block;
-    if (block.id === 'watermark') return styleBlock(block, { align: 'left', ...positioned.brand });
+    if (block.id === 'watermark') return styleBlock(block, { align: 'left', visible: true, ...positioned.brand });
     if (block.id === 'camera') return styleBlock(block, positioned.camera);
     if (block.id === 'gear') return styleBlock(block, positioned.gear);
     if (block.id === 'date') return styleBlock(block, positioned.date);
     return block;
   });
-  const tagline = taglineBlock(layout.tagline, positioned.tagline);
+  const tagline = taglineBlock(layout.tagline, { visible: true, ...positioned.tagline });
   const index = blocks.findIndex((block) => block.id === 'tagline');
   if (index >= 0) blocks[index] = tagline;
   else blocks.push(tagline);

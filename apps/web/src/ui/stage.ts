@@ -299,6 +299,12 @@ export class Stage {
     const showLoading =
       state.status === 'loading' ||
       (state.status === 'ready' && state.photo !== null && state.bitmap === null);
+    const showCanvas = !showEmpty && meta !== null && bitmap !== null;
+    setHidden(this.stack, !showCanvas);
+    if (!showCanvas) {
+      this.previewCtx.clearRect(0, 0, this.preview.width, this.preview.height);
+      this.lastBitmap = null;
+    }
     setHidden(this.empty, !showEmpty);
     setHidden(this.loading, !showLoading);
     if (showLoading) {

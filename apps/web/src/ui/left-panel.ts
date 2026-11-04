@@ -118,6 +118,9 @@ export class LeftPanel {
   private holesField!: ToggleHandle;
   private holesRow!: HTMLElement;
   private paramSizeField!: SliderHandle;
+  private paramColorField!: ColorHandle;
+  private paramWeightField!: SegmentedHandle<'400' | '600' | '700'>;
+  private brandToggle!: ToggleHandle;
   private paramBaseSizes: Record<string, number> | null = null;
   private paramLastStyleId: string | null = null;
   private paramLastPhotoId: string | null = null;
@@ -582,6 +585,29 @@ export class LeftPanel {
       onInput: (value) => this.scaleParameters(value),
     });
 
+    this.paramColorField = colorField({
+      label: '参数颜色',
+      value: '#5f5a52',
+      onChange: (value) => this.editor.setParameterStyle({ color: value }),
+    });
+    this.paramWeightField = segmentedField<'400' | '600' | '700'>({
+      label: '参数粗细',
+      options: [
+        { value: '400', label: '常规' },
+        { value: '600', label: '中粗' },
+        { value: '700', label: '粗体' },
+      ],
+      value: '400',
+      ariaLabel: '相机参数文字粗细',
+      onChange: (value) => this.editor.setParameterStyle({ weight: Number(value) as 400 | 600 | 700 }),
+    });
+    this.brandToggle = toggleField({
+      label: '品牌字标',
+      checked: true,
+      hint: '关闭后隐藏品牌字标与副标，只保留参数排版',
+      onChange: (checked) => this.editor.setBrandVisible(checked),
+    });
+
     this.shadowToggle = toggleField({
       label: '照片阴影',
       checked: false,
@@ -683,12 +709,15 @@ export class LeftPanel {
       body: h('div', {}, [
         h('p', { class: 'sec-mini-label mono', text: '品牌样式' }),
         brandStrip,
+        this.brandToggle.root,
         cards,
         this.marginField.root,
         this.bottomField.root,
         this.backgroundField.root,
         this.radiusField.root,
         this.paramSizeField.root,
+        this.paramColorField.root,
+        this.paramWeightField.root,
         this.holesRow,
         this.shadowBlock,
       ]),
@@ -701,8 +730,12 @@ export class LeftPanel {
     if (!config) return;
     if (!this.paramBaseSizes) {
       const base: Record<string, number> = {};
+      const hasBrand = config.blocks.some((block) => block.id === 'tagline');
       for (const block of config.blocks) {
-        if (block.type === 'text' && ['camera', 'gear', 'date'].includes(block.id)) {
+        if (block.type !== 'text') continue;
+        if (['camera', 'gear', 'date', 'tagline'].includes(block.id)) {
+          base[block.id] = block.size;
+        } else if (block.id === 'watermark' && hasBrand) {
           base[block.id] = block.size;
         }
       }
@@ -1154,6 +1187,24 @@ export class LeftPanel {
     for (const entry of this.brandCards) {
       entry.card.disabled = !hasFrame;
       toggleClass(entry.card, 'is-active', state.activeStyleId === entry.id);
+    }
+    const cameraBlock = config?.blocks.find(
+      (block) => block.id === 'camera' && block.type === 'text',
+    );
+    if (cameraBlock && cameraBlock.type === 'text') {
+      this.paramColorField.setValue(cameraBlock.color);
+      this.paramWeightField.setValue(String(cameraBlock.weight) as '400' | '600' | '700');
+    }
+    this.paramColorField.setDisabled(!hasFrame);
+    this.paramWeightField.setDisabled(!hasFrame);
+    this.paramSizeField.setDisabled(!hasFrame);
+    const watermarkVisible = config?.blocks.find(
+      (block) => block.id === 'watermark' && block.type === 'text',
+    );
+    const hasBrandBlocks = config?.blocks.some((block) => block.id === 'tagline') ?? false;
+    this.brandToggle.setDisabled(!hasBrandBlocks);
+    if (watermarkVisible && watermarkVisible.type === 'text') {
+      this.brandToggle.setValue(watermarkVisible.visible);
     }
     if (state.activeStyleId && state.activeStyleId !== this.paramLastStyleId) {
       this.paramBaseSizes = null;

@@ -1241,6 +1241,49 @@ export class Editor {
     this.scheduleRender();
   }
 
+  /** 一次性调整相机/参数/日期三行的颜色或字重。 */
+  setParameterStyle(patch: { color?: string; weight?: 400 | 600 | 700 }): void {
+    const config = this.state.config;
+    if (!config) return;
+    const ids = new Set(['camera', 'gear', 'date']);
+    const keys = Object.keys(patch) as (keyof typeof patch)[];
+    let changed = false;
+    const blocks = config.blocks.map((block) => {
+      if (block.type !== 'text' || !ids.has(block.id)) return block;
+      const next = { ...block };
+      for (const key of keys) {
+        const value = patch[key];
+        if (value === undefined) continue;
+        if (JSON.stringify(next[key]) !== JSON.stringify(value)) changed = true;
+        (next as unknown as Record<string, unknown>)[key] = value;
+      }
+      return next;
+    });
+    if (!changed) return;
+    this.beginEdit('params:style', 'idle', 600);
+    this.patch({ config: { ...config, blocks } });
+    this.scheduleRender();
+  }
+
+  /** 显示/隐藏品牌字标与副标（保留参数排版）。 */
+  setBrandVisible(visible: boolean): void {
+    const config = this.state.config;
+    if (!config) return;
+    const ids = new Set(['watermark', 'tagline']);
+    if (!config.blocks.some((block) => ids.has(block.id))) return;
+    let changed = false;
+    const blocks = config.blocks.map((block) => {
+      if (!ids.has(block.id) || block.visible === visible) return block;
+      changed = true;
+      return { ...block, visible };
+    });
+    if (!changed) return;
+    this.beginEdit('brand:visible', 'manual');
+    this.patch({ config: { ...config, blocks } });
+    this.scheduleRender();
+    this.endCoalescedEdit();
+  }
+
   /** 一键缩放相机/参数/日期文本字号（base 为缩放前的字号快照）。 */
   setParameterScale(scale: number, base: Record<string, number>): void {
     const config = this.state.config;
