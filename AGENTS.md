@@ -60,8 +60,9 @@ cargo run -p framed-cli -- render photo.jpg -t film -o out.png
 5. **字体**：`crates/core/assets/fonts/` 是子集化后的文件（含 OFL 文本），用 `scripts/build_fonts.py` 重新生成，不要手工替换成完整字体（wasm 体积会爆炸）。
 6. **生成物不入库**：`apps/web/public/framed_wasm.wasm`、`apps/web/dist`、`target/`、`node_modules/`、`apps/desktop/src-tauri/target/` 已在 `.gitignore`。
 7. **示例照片**：`apps/web/public/samples/` 由 `scripts/make_samples.py` 合成，带 EXIF；不要提交真实摄影师作品。
-8. **多图 = 多份配置**：`LibraryPhoto` 各持自己的 `RenderConfig`；切换照片用 `engine.selectImage(id, bytes)`（桌面端按 id 走原生缓存，不重传），批量导出用 `engine.exportBatch([{id, filename, config}])`。不要把「全局唯一 config」的想法加回来。
-9. **编辑器状态必须可撤销**：`apps/web` 里凡是改 `frame` / `blocks` 的操作都要走 `Editor` 的历史入口（`beginEdit` + `endCoalescedEdit`），并把连续操作合并成一步；选中、缩放、网格、抽屉、导出弹层等 UI 状态**不得**进历史。新增修改入口忘记接历史，撤销就会「跳过」这次改动。
+8. **多图 = 每张照片各持 config**：`LibraryPhoto` 各自持有 `RenderConfig`；不存「全局唯一 config 单例」——统一模式是通过 `patch()` 把当前 config 同步到各条目的（并保留各自 `exifTexts`）。切换照片用 `engine.selectImage(id, bytes)`（桌面端按 id 走原生缓存，不重传），批量导出用 `engine.exportBatch([{id, filename, config}])`。
+9. **批量参数默认统一**：`EditorState.sharedParams` 默认 `true`，`patch()` 里 config 变化要同步到所有 `LibraryPhoto`；但 `camera` / `gear` / `date` 文本按各照片 `exifTexts` 保留，不能全量覆盖。模式切换不进撤销栈、切换后重置历史。新增 config 修改入口不要绕开 `patch`（否则统一模式不同步）。
+10. **编辑器状态必须可撤销**：`apps/web` 里凡是改 `frame` / `blocks` 的操作都要走 `Editor` 的历史入口（`beginEdit` + `endCoalescedEdit`），并把连续操作合并成一步；选中、缩放、网格、抽屉、导出弹层等 UI 状态**不得**进历史。新增修改入口忘记接历史，撤销就会「跳过」这次改动。
 
 ## 视觉规范（UI）
 

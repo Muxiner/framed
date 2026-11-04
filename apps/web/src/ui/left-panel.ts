@@ -7,7 +7,13 @@ import {
   type FrameTemplate,
 } from '../types';
 import { h, percent, setText, setValue, toggleClass } from './dom';
-import { LIBRARY_LIMIT, type Editor, type EditorState, type LibraryPhoto } from './editor';
+import {
+  LIBRARY_LIMIT,
+  type BatchMode,
+  type Editor,
+  type EditorState,
+  type LibraryPhoto,
+} from './editor';
 import {
   colorField,
   iconButton,
@@ -92,6 +98,8 @@ export class LeftPanel {
   private libraryIds = '';
   private libraryActive: string | null = null;
   private libraryImporting = false;
+  private batchModeField!: SegmentedHandle<BatchMode>;
+  private batchModeNote!: HTMLElement;
 
   private templateCards = new Map<FrameTemplate, HTMLButtonElement>();
   private frameSection!: SectionHandle;
@@ -238,12 +246,35 @@ export class LeftPanel {
       class: 'library-empty-note',
       text: `拖入照片开始，或粘贴 / 导入多张（最多 ${LIBRARY_LIMIT} 张）。`,
     });
+    this.batchModeField = segmentedField<BatchMode>({
+      label: '参数',
+      options: [
+        { value: 'uniform', label: '统一' },
+        { value: 'separate', label: '单独' },
+      ],
+      value: 'uniform',
+      ariaLabel: '批量参数模式',
+      onChange: (mode) => this.editor.setSharedParams(mode === 'uniform'),
+    });
+    this.batchModeNote = h('p', { class: 'batch-mode-note', text: '' });
+    this.applyAllButton = textButton('应用当前参数到全部', {
+      icon: 'frame',
+      className: 'btn-block btn-ghost apply-all-btn',
+      title: '把当前照片的全部参数同步到其他照片（EXIF 文本各自保留）',
+      onClick: () => this.editor.applyCurrentToAll(),
+    });
+    this.applyAllButton.hidden = true;
     const library = h('div', { class: 'library-block' }, [
       h('div', { class: 'library-head' }, [
         h('span', { class: 'library-title mono', text: '照片库' }),
         this.libraryCount,
         h('span', { class: 'library-head-spacer' }),
         this.libraryClear,
+      ]),
+      h('div', { class: 'batch-mode-block' }, [
+        this.batchModeField.root,
+        this.batchModeNote,
+        this.applyAllButton,
       ]),
       this.libraryProgress,
       this.libraryEmpty,
@@ -448,14 +479,6 @@ export class LeftPanel {
     this.holesRow = this.holesField.root;
     this.holesRow.hidden = true;
 
-    this.applyAllButton = textButton('边框应用到全部', {
-      icon: 'frame',
-      className: 'btn-block btn-ghost frame-apply-all',
-      title: '把当前边框参数复制到照片库中的全部照片',
-      onClick: () => this.editor.applyFrameToAll(),
-    });
-    this.applyAllButton.hidden = true;
-
     this.frameSection = section({
       index: '02',
       title: '边框',
@@ -463,7 +486,6 @@ export class LeftPanel {
       open: true,
       body: h('div', {}, [
         cards,
-        this.applyAllButton,
         this.marginField.root,
         this.bottomField.root,
         this.backgroundField.root,
@@ -773,11 +795,19 @@ export class LeftPanel {
     this.syncLibrary(state);
     const libraryCount = state.library.length;
     this.importButton.disabled = state.importing !== null || state.status === 'boot';
-    this.applyAllButton.hidden = libraryCount < 2;
-    this.applyAllButton.disabled = libraryCount < 2;
+    this.batchModeField.setValue(state.sharedParams ? 'uniform' : 'separate');
+    setText(
+      this.batchModeNote,
+      state.sharedParams
+        ? '编辑同步到全部照片，EXIF 文本各自保留。'
+        : '每张照片独立参数，可用下方按钮一次性同步。',
+    );
+    const showApplyAll = !state.sharedParams && libraryCount >= 2;
+    this.applyAllButton.hidden = !showApplyAll;
+    this.applyAllButton.disabled = !showApplyAll;
     setText(
       this.applyAllButton.querySelector('span') ?? this.applyAllButton,
-      `边框应用到全部（${libraryCount} 张）`,
+      `应用当前参数到全部（${libraryCount} 张）`,
     );
 
     // 边框

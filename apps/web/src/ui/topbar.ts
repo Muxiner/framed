@@ -2,7 +2,7 @@
 import type { FrameTemplate, OutputFormat } from '../types';
 import { TEMPLATE_LABELS } from '../types';
 import { h, setAttr, setHidden, setText, setValue, toggleClass } from './dom';
-import type { Editor, EditorState } from './editor';
+import type { BatchMode, Editor, EditorState } from './editor';
 import {
   iconButton,
   segmentedField,
@@ -47,6 +47,8 @@ export class Topbar {
   private readonly nameInput: HTMLInputElement;
   private readonly popoverExport: HTMLButtonElement;
   private readonly exportAllButton: HTMLButtonElement;
+  private readonly batchModeField: SegmentedHandle<BatchMode>;
+  private readonly batchModeNote: HTMLElement;
   private readonly popoverFormatHint: HTMLElement;
   private lastExporting = false;
 
@@ -197,6 +199,17 @@ export class Topbar {
       },
     });
     this.nameInput.addEventListener('input', () => editor.setExportName(this.nameInput.value));
+    this.batchModeField = segmentedField<BatchMode>({
+      label: '参数',
+      options: [
+        { value: 'uniform', label: '统一' },
+        { value: 'separate', label: '单独' },
+      ],
+      value: 'uniform',
+      ariaLabel: '批量参数模式',
+      onChange: (mode) => editor.setSharedParams(mode === 'uniform'),
+    });
+    this.batchModeNote = h('p', { class: 'sec-note batch-mode-note', text: '' });
     this.popoverFormatHint = h('p', { class: 'sec-note', text: '' });
     this.popoverExport = textButton('导出图片', {
       icon: 'download',
@@ -229,6 +242,8 @@ export class Topbar {
           h('span', { class: 'popover-title mono', text: 'EXPORT' }),
           popoverClose,
         ]),
+        this.batchModeField.root,
+        this.batchModeNote,
         this.formatField.root,
         this.qualityRoot,
         this.maxDimField.root,
@@ -322,6 +337,13 @@ export class Topbar {
     toggleClass(this.exportCaret, 'is-open', state.exportOpen);
 
     setHidden(this.popover, !state.exportOpen);
+    this.batchModeField.setValue(state.sharedParams ? 'uniform' : 'separate');
+    setText(
+      this.batchModeNote,
+      state.sharedParams
+        ? '全部照片使用同一样式，EXIF 文本各自保留。'
+        : '每张照片使用各自参数。',
+    );
     if (state.config) {
       const output = state.config.output;
       this.formatField.setValue(output.format);

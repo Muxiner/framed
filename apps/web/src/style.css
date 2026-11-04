@@ -1178,6 +1178,30 @@ button:focus:not(:focus-visible) {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
 }
 
+/* =========================================================================== 批量参数模式 */
+
+.batch-mode-block {
+  margin: 2px 0 10px;
+}
+.batch-mode-block .field {
+  margin-bottom: 7px;
+}
+.batch-mode-block .field-head {
+  min-height: 14px;
+}
+.batch-mode-note {
+  margin: 0;
+  font-size: 9px;
+  line-height: 1.55;
+  color: var(--muted-2);
+}
+.export-popover .batch-mode-field {
+  margin-bottom: 8px;
+}
+.export-popover .batch-mode-note {
+  margin: -2px 0 12px;
+}
+
 /* =========================================================================== 左栏 · 照片库 */
 
 .library-block {
@@ -1453,12 +1477,12 @@ button:focus:not(:focus-visible) {
   color: var(--accent);
 }
 
-.frame-apply-all {
-  margin: -4px 0 16px;
+.apply-all-btn {
+  margin-top: 9px;
   height: 28px;
   font-size: 10.5px;
 }
-.frame-apply-all[hidden] {
+.apply-all-btn[hidden] {
   display: none;
 }
 

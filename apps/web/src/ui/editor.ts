@@ -23,6 +23,16 @@ export type EngineLabel = 'WASM' | 'MOCK' | 'TAURI';
 /** 照片库上限 */
 export const LIBRARY_LIMIT = 16;
 
+/** 批量参数模式：统一（默认）或每张单独。 */
+export type BatchMode = 'uniform' | 'separate';
+
+/** 从 EXIF 派生的三段文本，统一参数模式下按照片各自保留。 */
+export interface ExifTexts {
+  camera: string;
+  gear: string;
+  date: string;
+}
+
 export interface LibraryPhoto {
   id: string;
   name: string;
@@ -31,6 +41,7 @@ export interface LibraryPhoto {
   thumbUrl: string;
   config: RenderConfig;
   template: FrameTemplate;
+  exifTexts: ExifTexts;
 }
 
 export interface ImportProgress {
@@ -71,6 +82,25 @@ function directoryOf(path: string): string {
   return index > 0 ? path.slice(0, index) : path;
 }
 
+const EXIF_TEXT_IDS = ['camera', 'gear', 'date'] as const;
+type ExifTextId = (typeof EXIF_TEXT_IDS)[number];
+
+function isExifTextId(id: string): id is ExifTextId {
+  return id === 'camera' || id === 'gear' || id === 'date';
+}
+
+function exifTextsFromBlocks(blocks: readonly Block[], fallback?: ExifTexts): ExifTexts {
+  const texts: ExifTexts = {
+    camera: fallback?.camera ?? '',
+    gear: fallback?.gear ?? '',
+    date: fallback?.date ?? '',
+  };
+  for (const block of blocks) {
+    if (block.type === 'text' && isExifTextId(block.id)) texts[block.id] = block.text;
+  }
+  return texts;
+}
+
 /** 新照片继承当前照片的边框、水印文字、Logo、输出与网格，但 camera/gear/date 用新 EXIF。 */
 function inheritPhotoConfig(fresh: RenderConfig, base: RenderConfig | null): RenderConfig {
   if (!base) return fresh;
@@ -106,6 +136,8 @@ export interface EditorState {
   library: LibraryPhoto[];
   activePhotoId: string | null;
   importing: ImportProgress | null;
+  /** 批量参数是否统一（默认 true）：编辑自动同步到全部照片。 */
+  sharedParams: boolean;
   config: RenderConfig | null;
   selectedId: string | null;
   bitmap: ImageBitmap | null;
@@ -140,6 +172,7 @@ function initialState(): EditorState {
     library: [],
     activePhotoId: null,
     importing: null,
+    sharedParams: true,
     config: null,
     selectedId: null,
     bitmap: null,
@@ -311,8 +344,55 @@ export class Editor {
         entry.config = this.state.config;
         entry.template = this.state.config.frame.template;
       }
+      // 统一参数模式：当前编辑立即同步到其余照片（EXIF 三段文本仍各自保留）。
+      if (this.state.sharedParams) {
+        this.state.library = this.buildUniformLibrary(this.state.config);
+      }
     }
     for (const listener of this.listeners) listener(this.state);
+  }
+
+  private activeEntry(): LibraryPhoto | undefined {
+    const id = this.state.activePhotoId;
+    if (!id) return undefined;
+    return this.state.library.find((entry) => entry.id === id);
+  }
+
+  /** 以 master 为样式基底，但 camera/gear/date 文本使用目标照片自己的 exifTexts。 */
+  private uniformConfigFor(entry: LibraryPhoto, master: RenderConfig): RenderConfig {
+    const blocks: Block[] = master.blocks.map((block) => {
+      if (block.type !== 'text' || !isExifTextId(block.id)) return block;
+      const text = entry.exifTexts[block.id];
+      return typeof text === 'string' ? { ...block, text } : block;
+    });
+    return {
+      ...master,
+      blocks,
+      frame: { ...master.frame },
+      grid: { ...master.grid },
+      output: { ...master.output },
+    };
+  }
+
+  private buildUniformLibrary(master: RenderConfig | null = this.state.config): LibraryPhoto[] {
+    const activeId = this.state.activePhotoId;
+    if (!master || !activeId) return this.state.library;
+    return this.state.library.map((entry) =>
+      entry.id === activeId
+        ? entry
+        : {
+            ...entry,
+            template: master.frame.template,
+            config: this.uniformConfigFor(entry, master),
+          },
+    );
+  }
+
+  /** 统一模式下把当前照片的 EXIF 文本写进自己的 exifTexts，避免切走/撤销后被旧文本覆盖。 */
+  private updateActiveExifTexts(blocks: readonly Block[]): void {
+    const entry = this.activeEntry();
+    if (!entry) return;
+    entry.exifTexts = exifTextsFromBlocks(blocks, entry.exifTexts);
   }
 
   // ---------------------------------------------------------------- 撤销 / 重做
@@ -408,6 +488,8 @@ export class Editor {
     const focus = captureFocusState(document.activeElement);
     if (focus && focus.element !== document.body) focus.element.blur();
     const next: RenderConfig = { ...config, frame: entry.frame, blocks: entry.blocks };
+    // 恢复的是当前照片快照；先把 EXIF 文本同步进库，统一模式随后的同步才正确。
+    this.updateActiveExifTexts(entry.blocks);
     const selectedId = this.resolveHistorySelection(config.blocks, entry.blocks);
     this.patch({
       config: next,
@@ -585,6 +667,7 @@ export class Editor {
             thumbUrl,
             config,
             template,
+            exifTexts: exifTextsFromBlocks(fresh.blocks),
           };
           added.push(entry);
           this.patch({
@@ -631,6 +714,7 @@ export class Editor {
     try {
       const info = await engine.selectImage(entry.id, entry.bytes);
       entry.info = info;
+      entry.exifTexts = exifTextsFromBlocks(entry.config.blocks, entry.exifTexts);
       this.seq += 1;
       this.patch({
         photo: info,
@@ -745,25 +829,41 @@ export class Editor {
     this.resetHistory();
   }
 
-  /** 把当前边框参数复制到照片库中的所有照片（当前照片已经是最新）。 */
-  applyFrameToAll(): void {
+  /** 切换批量参数：不进入撤销历史，切换本身会清空历史。 */
+  setSharedParams(shared: boolean): void {
+    if (this.state.sharedParams === shared) return;
+    this.endCoalescedEdit();
+    this.saveActiveConfig();
+    const config = this.state.config;
+    this.patch({ sharedParams: shared });
+    this.resetHistory();
+    if (shared && config) {
+      this.patch({ library: this.buildUniformLibrary(config) });
+    }
+    toast(
+      shared
+        ? `已切换为统一参数，已同步到 ${this.state.library.length} 张照片（EXIF 文本各自保留）`
+        : '已切换为单独调整，之后修改只影响当前照片',
+      'info',
+      3200,
+    );
+  }
+
+  /** UI 分段控件的便捷入口。 */
+  setBatchMode(mode: BatchMode): void {
+    this.setSharedParams(mode === 'uniform');
+  }
+
+  /** 单独模式下，把当前照片的全部参数一次性同步到其余照片（EXIF 文本仍各自保留）。 */
+  applyCurrentToAll(): void {
+    if (this.state.sharedParams) return;
     const config = this.state.config;
     const count = this.state.library.length;
     if (!config || count < 2) return;
     this.endCoalescedEdit();
     this.saveActiveConfig();
-    const frame = { ...config.frame };
-    const library = this.state.library.map((entry) =>
-      entry.id === this.state.activePhotoId
-        ? entry
-        : {
-            ...entry,
-            template: frame.template,
-            config: { ...entry.config, frame: { ...frame } },
-          },
-    );
-    this.patch({ library });
-    toast(`边框已应用到全部 ${count} 张照片`, 'success', 2800);
+    this.patch({ library: this.buildUniformLibrary(config) });
+    toast(`已应用当前参数到全部 ${count} 张照片`, 'success', 2800);
   }
 
   // ---------------------------------------------------------------- 模板 / 边框
@@ -862,6 +962,10 @@ export class Editor {
       (key) => JSON.stringify(target[key]) !== JSON.stringify(patch[key]),
     );
     if (!changed) return;
+    if (isExifTextId(id) && typeof patch.text === 'string') {
+      const entry = this.activeEntry();
+      if (entry) entry.exifTexts = { ...entry.exifTexts, [id]: patch.text };
+    }
     this.beginEdit(
       `text:${id}:${keys.slice().sort().join(',')}`,
       options.discrete ? 'manual' : 'idle',
@@ -1092,10 +1196,19 @@ export class Editor {
     this.endCoalescedEdit();
     this.saveActiveConfig();
     this.patch({ exporting: true });
+    const uniform = this.state.sharedParams;
+    const modeLabel = uniform ? '统一参数' : '单独参数';
+    const master = this.state.config;
     try {
       const used = new Set<string>();
       const items = library.map((entry) => {
-        const format = entry.config.output.format;
+        const config =
+          uniform && master
+            ? entry.id === this.state.activePhotoId
+              ? structuredClone(master)
+              : this.uniformConfigFor(entry, master)
+            : structuredClone(entry.config);
+        const format = config.output.format;
         const extension = format === 'jpeg' ? 'jpg' : 'png';
         const base = sanitizeBaseName(entry.name);
         let filename = `${base}-framed.${extension}`;
@@ -1105,16 +1218,24 @@ export class Editor {
           suffix += 1;
         }
         used.add(filename.toLowerCase());
-        return { id: entry.id, filename, config: structuredClone(entry.config) };
+        return { id: entry.id, filename, config };
       });
       const result = await this.enqueuePhotoOp(() => engine.exportBatch(items));
       if (result.canceled) {
         toast('已取消批量导出', 'info', 2600);
       } else if (engine.kind === 'tauri') {
         const directory = result.paths?.[0] ? directoryOf(result.paths[0]) : '';
-        toast(`已导出 ${result.saved} 张照片${directory ? ` · ${directory}` : ''}`, 'success', 5200);
+        toast(
+          `已导出 ${result.saved} 张照片（${modeLabel}）${directory ? ` · ${directory}` : ''}`,
+          'success',
+          5200,
+        );
       } else {
-        toast(`已导出 ${result.saved} 张照片 · 浏览器可能询问多个下载`, 'success', 5200);
+        toast(
+          `已导出 ${result.saved} 张照片（${modeLabel}）· 浏览器可能询问多个下载`,
+          'success',
+          5200,
+        );
       }
       this.patch({ exportOpen: false });
     } catch (error) {
