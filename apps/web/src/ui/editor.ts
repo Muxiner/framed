@@ -14,6 +14,18 @@ import type {
   RenderMeta,
   TextBlock,
 } from '../types';
+import {
+  FONT_MAX_BYTES,
+  deleteFontRecord,
+  fontNameFromFile,
+  isFontFile,
+  loadFontRecords,
+  nextFontId,
+  saveFontRecord,
+  uniqueFontName,
+  type CustomFontMeta,
+} from './fonts';
+import type { Preset } from './presets';
 import { fetchSample, type SampleId } from './samples';
 import { toast } from './toast';
 
@@ -138,6 +150,8 @@ export interface EditorState {
   importing: ImportProgress | null;
   /** 批量参数是否统一（默认 true）：编辑自动同步到全部照片。 */
   sharedParams: boolean;
+  customFonts: CustomFontMeta[];
+  fontBusy: boolean;
   config: RenderConfig | null;
   selectedId: string | null;
   bitmap: ImageBitmap | null;
@@ -173,6 +187,8 @@ function initialState(): EditorState {
     activePhotoId: null,
     importing: null,
     sharedParams: true,
+    customFonts: [],
+    fontBusy: false,
     config: null,
     selectedId: null,
     bitmap: null,
@@ -524,6 +540,7 @@ export class Editor {
       this.engine = engine;
       const label: EngineLabel = engine.kind === 'tauri' ? 'TAURI' : isMockEngine(engine) ? 'MOCK' : 'WASM';
       this.patch({ engineKind: engine.kind, engineLabel: label, status: 'empty' });
+      await this.restoreCustomFonts(engine);
       if (label === 'MOCK') {
         toast('开发回退引擎（Canvas2D）已启用，wasm 内核就绪后自动切换', 'info', 4200);
       }
@@ -531,6 +548,158 @@ export class Editor {
       this.patch({ status: 'empty' });
       toast(`渲染引擎初始化失败：${errorMessage(error)}`, 'error', 6000);
     }
+  }
+
+  // ---------------------------------------------------------------- 用户字体
+
+  private async restoreCustomFonts(engine: Engine): Promise<void> {
+    const records = await loadFontRecords();
+    if (records.length === 0) return;
+    const metas: CustomFontMeta[] = [];
+    for (const record of records) {
+      try {
+        await engine.registerFont(record.id, new Uint8Array(record.bytes));
+        metas.push({
+          id: record.id,
+          name: record.name,
+          size: record.size,
+          addedAt: record.addedAt,
+        });
+      } catch (error) {
+        console.warn('[framed] 恢复自定义字体失败，已跳过', record.name, error);
+      }
+    }
+    if (metas.length > 0) this.patch({ customFonts: metas });
+  }
+
+  async uploadFont(file: File): Promise<void> {
+    const engine = this.engine;
+    if (!engine) {
+      toast('渲染引擎尚未就绪，请稍后再试', 'error', 3200);
+      return;
+    }
+    if (this.state.fontBusy) return;
+    if (!isFontFile(file)) {
+      toast('仅支持 .ttf / .otf 字体文件', 'error', 3600);
+      return;
+    }
+    if (file.size > FONT_MAX_BYTES) {
+      toast('字体文件超过 8MB 限制', 'error', 4200);
+      return;
+    }
+    this.patch({ fontBusy: true });
+    try {
+      const bytes = await file.arrayBuffer();
+      const id = nextFontId();
+      const name = uniqueFontName(
+        fontNameFromFile(file.name),
+        this.state.customFonts.map((font) => font.name),
+      );
+      await engine.registerFont(id, new Uint8Array(bytes));
+      const meta: CustomFontMeta = {
+        id,
+        name,
+        size: file.size,
+        addedAt: new Date().toISOString(),
+      };
+      const persisted = await saveFontRecord({ ...meta, bytes });
+      if (!persisted) console.warn('[framed] 自定义字体持久化失败，刷新后可能丢失');
+      this.patch({ customFonts: [...this.state.customFonts, meta], fontBusy: false });
+      const applied = this.applyFontToSelectedTextBlock(id);
+      toast(
+        applied ? `已上传字体「${name}」并应用到当前文字` : `已上传字体「${name}」`,
+        'success',
+        3200,
+      );
+    } catch (error) {
+      this.patch({ fontBusy: false });
+      toast(`字体上传失败：${errorMessage(error)}`, 'error', 5200);
+    }
+  }
+
+  private applyFontToSelectedTextBlock(fontId: string): boolean {
+    const config = this.state.config;
+    const selectedId = this.state.selectedId;
+    if (!config || !selectedId) return false;
+    const block = config.blocks.find((item) => item.id === selectedId);
+    if (!block || block.type !== 'text') return false;
+    const blocks = config.blocks.map((item) =>
+      item.id === selectedId && item.type === 'text' ? { ...item, customFont: fontId } : item,
+    );
+    this.beginEdit('font:apply', 'manual');
+    this.patch({ config: { ...config, blocks } });
+    this.scheduleRender();
+    this.endCoalescedEdit();
+    return true;
+  }
+
+  async deleteFont(id: string): Promise<void> {
+    if (this.state.fontBusy) return;
+    const meta = this.state.customFonts.find((font) => font.id === id);
+    if (!meta) return;
+    this.endCoalescedEdit();
+    const engine = this.engine;
+    if (engine) {
+      try {
+        await engine.removeFont(id);
+      } catch (error) {
+        console.warn('[framed] 渲染内核移除字体失败', meta.name, error);
+      }
+    }
+    await deleteFontRecord(id);
+    this.patch({ customFonts: this.state.customFonts.filter((font) => font.id !== id) });
+
+    const config = this.state.config;
+    let clearedActive = false;
+    if (config) {
+      const hasReference = config.blocks.some(
+        (block) => block.type === 'text' && block.customFont === id,
+      );
+      if (hasReference) {
+        const blocks = config.blocks.map((block) =>
+          block.type === 'text' && block.customFont === id
+            ? { ...block, customFont: null }
+            : block,
+        );
+        this.beginEdit('font:remove', 'manual');
+        this.patch({ config: { ...config, blocks } });
+        this.scheduleRender();
+        this.endCoalescedEdit();
+        clearedActive = true;
+      }
+    }
+
+    // 单独模式下其他照片不会跟随 patch，需要手动清理引用；统一模式下 patch 已同步。
+    const activeId = this.state.activePhotoId;
+    let clearedOthers = false;
+    const library = this.state.library.map((entry) => {
+      if (entry.id === activeId) return entry;
+      const hasReference = entry.config.blocks.some(
+        (block) => block.type === 'text' && block.customFont === id,
+      );
+      if (!hasReference) return entry;
+      clearedOthers = true;
+      return {
+        ...entry,
+        config: {
+          ...entry.config,
+          blocks: entry.config.blocks.map((block) =>
+            block.type === 'text' && block.customFont === id
+              ? { ...block, customFont: null }
+              : block,
+          ),
+        },
+      };
+    });
+    if (clearedOthers) this.patch({ library });
+
+    toast(
+      clearedActive || clearedOthers
+        ? `已删除字体「${meta.name}」，引用它的文字已回退内置字体`
+        : `已删除字体「${meta.name}」`,
+      'info',
+      3200,
+    );
   }
 
   // ---------------------------------------------------------------- 照片库 / 多图导入
@@ -866,6 +1035,37 @@ export class Editor {
     toast(`已应用当前参数到全部 ${count} 张照片`, 'success', 2800);
   }
 
+  /** 套用自定义预设：覆盖当前照片 frame/blocks，保留 output/grid；文本按当前照片 EXIF。 */
+  applyPreset(preset: Preset): void {
+    const config = this.state.config;
+    if (!config) {
+      toast('请先导入照片再套用预设', 'info', 2400);
+      return;
+    }
+    const active = this.activeEntry();
+    const blocks: Block[] = preset.config.blocks.map((block) => {
+      if (block.type === 'text' && isExifTextId(block.id)) {
+        const text = active?.exifTexts[block.id];
+        if (typeof text === 'string') return { ...block, text };
+      }
+      return { ...block };
+    });
+    const next: RenderConfig = {
+      ...config,
+      frame: { ...preset.config.frame },
+      blocks,
+    };
+    const selectedId =
+      this.state.selectedId && blocks.some((block) => block.id === this.state.selectedId)
+        ? this.state.selectedId
+        : null;
+    this.beginEdit('preset:apply', 'manual');
+    this.patch({ config: next, template: next.frame.template, selectedId });
+    this.scheduleRender();
+    this.endCoalescedEdit();
+    toast(`已套用预设「${preset.name}」`, 'success', 2800);
+  }
+
   // ---------------------------------------------------------------- 模板 / 边框
 
   async setTemplate(template: FrameTemplate): Promise<void> {
@@ -958,9 +1158,12 @@ export class Editor {
     if (!target || target.type !== 'text') return;
     const keys = Object.keys(patch) as (keyof typeof patch)[];
     if (keys.length === 0) return;
-    const changed = keys.some(
-      (key) => JSON.stringify(target[key]) !== JSON.stringify(patch[key]),
-    );
+    const changed = keys.some((key) => {
+      if (key === 'customFont') {
+        return (target.customFont ?? null) !== (patch.customFont ?? null);
+      }
+      return JSON.stringify(target[key]) !== JSON.stringify(patch[key]);
+    });
     if (!changed) return;
     if (isExifTextId(id) && typeof patch.text === 'string') {
       const entry = this.activeEntry();

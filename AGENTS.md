@@ -64,6 +64,9 @@ cargo run -p framed-cli -- render photo.jpg -t film -o out.png
 9. **批量参数默认统一**：`EditorState.sharedParams` 默认 `true`，`patch()` 里 config 变化要同步到所有 `LibraryPhoto`；但 `camera` / `gear` / `date` 文本按各照片 `exifTexts` 保留，不能全量覆盖。模式切换不进撤销栈、切换后重置历史。新增 config 修改入口不要绕开 `patch`（否则统一模式不同步）。
 10. **编辑器状态必须可撤销**：`apps/web` 里凡是改 `frame` / `blocks` 的操作都要走 `Editor` 的历史入口（`beginEdit` + `endCoalescedEdit`），并把连续操作合并成一步；选中、缩放、网格、抽屉、导出弹层等 UI 状态**不得**进历史。新增修改入口忘记接历史，撤销就会「跳过」这次改动。
 
+11. **用户字体**：文本块用 `customFont`（字体 id）引用，上传走 `engine.registerFont(id, bytes)`；字体解析/注册在 core（`register_user_font`），wasm/tauri 各自暴露入口。网页端持久化在 IndexedDB（`framed/fonts`），刷新后重新注册；删除字体要清空引用块。
+12. **预设**：localStorage `framed.presets.v1`（`{version, presets}`，上限 30）；套用走 `editor.applyPreset`，只覆盖 frame/blocks、保留 output/grid、camera/gear/date 按当前照片 `exifTexts` 替换、并进入撤销历史。
+
 ## 视觉规范（UI）
 
 - 暗色影像工具风：页面 `#0d0c0b`，面板 `#141311`，卡片 `#1a1815`，分割线 `#2a2723`，主文字 `#efeae1`，次文字 `#8c8579`，强调色暖金 `#e5b567`。

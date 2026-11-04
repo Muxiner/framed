@@ -102,6 +102,42 @@ pub unsafe extern "C" fn framed_default_config(ptr: *const u8, len: u32) -> *mut
     ok_json(serde_json::to_value(config).unwrap_or_else(|_| json!({})))
 }
 
+/// 注册用户字体（ttf/otf）：`id` 为文本块 `customFont` 里引用的名字。
+///
+/// # Safety
+/// 两段 `(ptr, len)` 必须都是调用方通过 `framed_alloc` 写入的有效字节区间。
+#[no_mangle]
+pub unsafe extern "C" fn framed_register_font(
+    id_ptr: *const u8,
+    id_len: u32,
+    data_ptr: *const u8,
+    data_len: u32,
+) -> *mut u8 {
+    let id = match std::str::from_utf8(input(id_ptr, id_len)) {
+        Ok(id) => id,
+        Err(err) => return error(&format!("字体 id 不是合法 UTF-8：{err}")),
+    };
+    match framed_core::register_user_font(id, input(data_ptr, data_len)) {
+        Ok(()) => ok_json(json!({ "id": id })),
+        Err(err) => error(&err),
+    }
+}
+
+/// 移除用户字体。
+///
+/// # Safety
+/// `ptr/len` 必须是调用方通过 `framed_alloc` 写入的有效 UTF-8 区间。
+#[no_mangle]
+pub unsafe extern "C" fn framed_remove_font(ptr: *const u8, len: u32) -> *mut u8 {
+    match std::str::from_utf8(input(ptr, len)) {
+        Ok(id) => {
+            framed_core::remove_user_font(id);
+            ok_json(json!({ "id": id }))
+        }
+        Err(err) => error(&format!("字体 id 不是合法 UTF-8：{err}")),
+    }
+}
+
 /// 解码 + 转正 + 缩放到 `max_dim`，缓存为预览底图；返回 PhotoInfo。
 ///
 /// # Safety

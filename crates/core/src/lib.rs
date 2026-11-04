@@ -21,6 +21,7 @@ pub use config::{
     OutputFormat, RenderConfig, TextAlign, TextBlock,
 };
 pub use exif::{probe, ExifInfo, PhotoInfo};
+pub use fonts::{register_user_font, remove_user_font, user_font_ids};
 pub use layout::{default_config, geometry, Geometry};
 pub use render::{
     prepare_photo, render, render_prepared, BlockRect, PreparedPhoto, RenderMeta, RenderOutput,

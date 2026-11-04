@@ -70,6 +70,7 @@ interface TextBlock extends BlockBase {
   type: 'text';
   text: string;          // 支持 \n 多行
   font: FontFamily;      // sans=Inter，mono=JetBrains Mono，cjk=Noto Sans SC
+  customFont?: string;   // 用户上传字体 id；缺字形时按 font 回退
   weight: 400 | 600 | 700;
   size: number;          // 字号倍数（基准字号 = min(画布宽, 画布高) * 0.018），0.5–4
   lineHeight: number;    // 1.0–2.4
@@ -187,6 +188,8 @@ framed_alloc(len: u32) -> *mut u8
 framed_free(ptr: *mut u8, len: u32)
 framed_probe(ptr: *const u8, len: u32) -> *mut u8
 framed_prepare(ptr: *const u8, len: u32, max_dim: u32) -> *mut u8   # 解码+转正+缩放并缓存预览底图
+framed_register_font(id_ptr: *const u8, id_len: u32, data_ptr: *const u8, data_len: u32) -> *mut u8  # 注册用户字体
+framed_remove_font(ptr: *const u8, len: u32) -> *mut u8              # 移除用户字体
 framed_default_config(ptr: *const u8, len: u32) -> *mut u8
 framed_render_preview(cfg_ptr: *const u8, cfg_len: u32) -> *mut u8  # 用缓存底图合成 + JPEG（热路径）
 framed_render(img_ptr: *const u8, img_len: u32, cfg_ptr: *const u8, cfg_len: u32) -> *mut u8  # 全尺寸导出
@@ -214,6 +217,9 @@ default_config(photo_json: String, template: String) -> String
 render_image(config_json: String) -> tauri::ipc::Response   # 打包格式同 §3.2（meta+png）
 export_image(config_json: String, suggested_name: String) -> Option<String>
 export_batch(items_json: String) -> { saved, paths, canceled }       # 选目录后批量写入
+register_font(id: String, data_b64: String) -> ()                   # 注册用户字体（ttf/otf）
+remove_font(id: String) -> ()                                       # 移除用户字体
+list_fonts() -> [String]                                            # 当前进程已注册字体 id
 ```
 
 - 渲染走原生 `framed-core`，不加载 wasm；`render_image` 是预览热路径：复用 `PhotoState` 里已解码的预览底图，只合成 + JPEG(q90) 编码后返回。
@@ -245,6 +251,8 @@ export_batch(items_json: String) -> { saved, paths, canceled }       # 选目录
 - 检查器：字号、字重、行高、字间距、颜色、不透明度、对齐、阴影；**12×12 定位器**（144 格，点击定位）+ 9 宫格快捷位 + 偏移微调；`x/y` 数值输入。Logo 块显示宽度/位置/透明度。
 - 照片库：拖拽任意位置导入 1..N 张、文件多选、粘贴多图；左栏缩略图网格（当前高亮、hover 删除、点击切换、上限 16）；每张照片独立配置；切换 < 1s；导入进度与跳过提示。
 - 批量参数：默认「统一」（`sharedParams: true`）——任何 `frame` / `blocks` 编辑在 `patch` 时自动同步到照片库全部照片；但 `camera` / `gear` / `date` 三个文字块的**文本**按各照片 `exifTexts` 各自保留（编辑这三段只更新当前照片），其余样式/位置/水印/Logo/output/grid 全量同步。切「单独」后各照片独立，编辑只影响当前；「应用当前参数到全部」可一次性同步（文本按各图 EXIF 替换）。模式切换不进撤销栈并重置历史。
+- 预设：边框区「预设」入口，可把当前 `frame + blocks` 保存为命名预设（localStorage，上限 30），随时套用/删除/导出 JSON/导入 JSON；套用时 camera/gear/date 文本按当前照片 EXIF 替换，保留 output/grid 并走撤销历史。
+- 自定义字体：左栏字体区上传 ttf/otf（≤8MB），检查器字体下拉可选用；已上传字体在网页端持久化（IndexedDB），桌面端为当前进程内有效；移除字体时引用它的文本块自动回退到内置字体。
 - 批量导出：导出弹层支持「导出全部」，按当前模式构造配置——统一模式用 master 样式 + 各图 EXIF 文本，单独模式用各自 config；网页端逐张下载、桌面端选目录一次写入。
 - 交互：所有修改 < 100ms 内反映到预览（rAF 合并渲染请求）；渲染中显示轻微状态点；错误 toast；导出成功 toast。
 - 撤销 / 重做：`⌘/Ctrl+Z` 撤销，`⇧⌘Z` / `Ctrl+Y` 重做；顶栏按钮带禁用态与快捷键提示；历史栈上限 40。一次拖拽、一段连续文字输入（800ms 静默 / blur / Enter / 切换选中时提交）、一次滑杆拖动各记 1 步；模板切换 / 块显隐 / Logo 上传删除各 1 步。选中、缩放、12 栅格开关、抽屉、导出弹层**不进历史**；新编辑清空 redo；换照片重置历史；撤销后自动选中发生变化的块。
@@ -299,3 +307,5 @@ cargo run -p framed-cli -- --help
 6. 撤销 / 重做：拖拽一次后撤销回到原坐标、重做恢复；连续输入一次撤销清整段且输入框焦点保持；顶栏按钮禁用态正确。
 7. 多图：一次拖入 3 张照片 → 照片库 3 张、激活第一张；删除后数量正确；「导出全部」产出 3 个文件（网页端下载 / 桌面端一次选目录写入）。
 8. 批量参数：默认统一——改水印/边距后 3 张 config 数值一致，且 camera 文本分别为 SONY/FUJIFILM/Canon；切单独后改一张不影响其他；切回统一后全部变为当前参数；统一模式撤销/重做可让全部照片跟随回退。
+9. 预设：保存当前排版为预设后改乱参数 → 套用预设恢复 frame/blocks、camera 文本仍来自当前照片；刷新后预设仍在；导入/导出 JSON 可用。
+10. 自定义字体：上传 ttf → 指定到文字块后渲染不报错且 config.customFont 生效；移除字体后文本回退内置字体，页面不崩。

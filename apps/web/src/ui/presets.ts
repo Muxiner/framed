@@ -1,0 +1,401 @@
+// 自定义预设：把当前 frame + blocks 存到 localStorage，可导出/导入 JSON。
+// 注意：预设只影响 frame/blocks；套用时保留当前照片的 output/grid。
+import type {
+  AnchorY,
+  Block,
+  FontFamily,
+  FrameConfig,
+  FrameTemplate,
+  GridConfig,
+  LogoBlock,
+  OutputConfig,
+  RenderConfig,
+  TextAlign,
+  TextBlock,
+} from '../types';
+
+export const PRESET_STORAGE_KEY = 'framed.presets.v1';
+export const PRESET_NAME_MAX = 30;
+export const PRESET_LIMIT = 30;
+export const PRESET_LOGO_LIMIT = 2 * 1024 * 1024;
+const PRESET_VERSION = 1;
+
+export interface Preset {
+  id: string;
+  name: string;
+  createdAt: string;
+  config: RenderConfig;
+}
+
+export type SavePresetResult =
+  | { ok: true; preset: Preset; renamed: boolean; hasLogo: boolean; bytes: number }
+  | { ok: false; error: string };
+
+export interface ImportPresetsResult {
+  added: number;
+  skipped: number;
+  renamed: number;
+  error?: string;
+}
+
+const TEMPLATES: readonly FrameTemplate[] = ['none', 'white', 'polaroid', 'film', 'black'];
+const FONTS: readonly FontFamily[] = ['sans', 'mono', 'cjk'];
+const ALIGNS: readonly TextAlign[] = ['left', 'center', 'right'];
+const ANCHORS: readonly AnchorY[] = ['top', 'middle', 'bottom'];
+const WEIGHTS = [400, 600, 700] as const;
+
+let presetSequence = 0;
+
+function nextPresetId(): string {
+  presetSequence += 1;
+  const random = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${presetSequence}`;
+  return `preset-${random}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isHexColor(value: unknown): value is string {
+  return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeFrame(value: unknown): FrameConfig | null {
+  if (!isRecord(value)) return null;
+  const template = value.template;
+  if (typeof template !== 'string' || !TEMPLATES.includes(template as FrameTemplate)) return null;
+  if (!isNumber(value.margin) || !isNumber(value.bottomRatio) || !isNumber(value.radius)) return null;
+  if (!isHexColor(value.background) || typeof value.filmHoles !== 'boolean') return null;
+  return {
+    template: template as FrameTemplate,
+    margin: clamp(value.margin, 0, 0.5),
+    bottomRatio: clamp(value.bottomRatio, 0.5, 10),
+    background: value.background.toLowerCase(),
+    radius: clamp(value.radius, 0, 0.5),
+    filmHoles: value.filmHoles,
+  };
+}
+
+function normalizeBlock(value: unknown): Block | null {
+  if (!isRecord(value)) return null;
+  const { id, name, x, y, align, alignY, opacity, visible, type } = value;
+  if (typeof id !== 'string' || !id) return null;
+  if (typeof name !== 'string') return null;
+  if (!isNumber(x) || !isNumber(y) || !isNumber(opacity) || typeof visible !== 'boolean') return null;
+  if (typeof align !== 'string' || !ALIGNS.includes(align as TextAlign)) return null;
+  if (typeof alignY !== 'string' || !ANCHORS.includes(alignY as AnchorY)) return null;
+  const base = {
+    id,
+    name: name.slice(0, 60),
+    x: clamp(x, 0, 1),
+    y: clamp(y, 0, 1),
+    align: align as TextAlign,
+    alignY: alignY as AnchorY,
+    opacity: clamp(opacity, 0, 1),
+    visible,
+  };
+  if (type === 'text') {
+    const { text, font, weight, size, lineHeight, letterSpacing, color, shadow } = value;
+    if (typeof text !== 'string') return null;
+    if (typeof font !== 'string' || !FONTS.includes(font as FontFamily)) return null;
+    if (typeof weight !== 'number' || !WEIGHTS.includes(weight as 400 | 600 | 700)) return null;
+    if (!isNumber(size) || !isNumber(lineHeight) || !isNumber(letterSpacing)) return null;
+    if (!isHexColor(color) || typeof shadow !== 'boolean') return null;
+    const block: TextBlock = {
+      ...base,
+      type: 'text',
+      text,
+      font: font as FontFamily,
+      weight: weight as 400 | 600 | 700,
+      size: clamp(size, 0.1, 10),
+      lineHeight: clamp(lineHeight, 0.5, 5),
+      letterSpacing: clamp(letterSpacing, -1, 1),
+      color: color.toLowerCase(),
+      shadow,
+    };
+    // 预留：用户字体 id（types.ts 可选字段），预设透传不丢。
+    if (typeof value.customFont === 'string' || value.customFont === null) {
+      block.customFont = value.customFont;
+    }
+    return block;
+  }
+  if (type === 'logo') {
+    const { src, width } = value;
+    if (typeof src !== 'string' || !src.startsWith('data:image/')) return null;
+    if (!isNumber(width)) return null;
+    const block: LogoBlock = {
+      ...base,
+      type: 'logo',
+      src,
+      width: clamp(width, 0.01, 1),
+    };
+    return block;
+  }
+  return null;
+}
+
+function normalizeOutput(value: unknown): OutputConfig {
+  if (!isRecord(value)) return { format: 'png', quality: 92, maxDim: 0 };
+  return {
+    format: value.format === 'jpeg' ? 'jpeg' : 'png',
+    quality: isNumber(value.quality) ? clamp(Math.round(value.quality), 1, 100) : 92,
+    maxDim: isNumber(value.maxDim) ? clamp(Math.round(value.maxDim), 0, 20000) : 0,
+  };
+}
+
+function normalizeGrid(value: unknown): GridConfig {
+  return {
+    columns: 12,
+    rows: 12,
+    snap: isRecord(value) && value.snap === true,
+    visible: isRecord(value) && value.visible === true,
+  };
+}
+
+function normalizePreset(value: unknown): Preset | null {
+  if (!isRecord(value)) return null;
+  const rawName = typeof value.name === 'string' ? value.name.trim() : '';
+  if (!rawName) return null;
+  const config = value.config;
+  if (!isRecord(config) || !Array.isArray(config.blocks)) return null;
+  const frame = normalizeFrame(config.frame);
+  if (!frame) return null;
+  const blocks: Block[] = [];
+  for (const rawBlock of config.blocks) {
+    const block = normalizeBlock(rawBlock);
+    if (!block) return null;
+    blocks.push(block);
+  }
+  if (blocks.length === 0) return null;
+  const createdAt = typeof value.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt))
+    ? new Date(value.createdAt).toISOString()
+    : new Date().toISOString();
+  return {
+    id: typeof value.id === 'string' && value.id ? value.id : nextPresetId(),
+    name: rawName.slice(0, PRESET_NAME_MAX),
+    createdAt,
+    config: {
+      version: 1,
+      frame,
+      blocks,
+      output: normalizeOutput(config.output),
+      grid: normalizeGrid(config.grid),
+    },
+  };
+}
+
+function presetSizeBytes(preset: Preset): number {
+  try {
+    return new TextEncoder().encode(JSON.stringify(preset)).length;
+  } catch {
+    return Number.MAX_SAFE_INTEGER;
+  }
+}
+
+function uniquePresetName(
+  name: string,
+  existing: readonly string[],
+): { name: string; renamed: boolean } {
+  const used = new Set(existing.map((item) => item.trim().toLocaleLowerCase()));
+  const base = name.trim().slice(0, PRESET_NAME_MAX) || '未命名预设';
+  if (!used.has(base.toLocaleLowerCase())) return { name: base, renamed: false };
+  for (let index = 2; index < 1000; index += 1) {
+    const suffix = ` ${index}`;
+    const candidate = `${base.slice(0, PRESET_NAME_MAX - suffix.length)}${suffix}`;
+    if (!used.has(candidate.toLocaleLowerCase())) return { name: candidate, renamed: true };
+  }
+  const fallback = `预设 ${Date.now().toString(36).slice(-5)}`;
+  return { name: fallback, renamed: true };
+}
+
+/** 保存到预设时只让 frame/blocks 生效；output/grid 保留当前照片的值（套用时忽略预设里的）。 */
+export function createPresetConfig(config: RenderConfig): RenderConfig {
+  return {
+    version: 1,
+    frame: { ...config.frame },
+    blocks: config.blocks.map((block) => ({ ...block })),
+    grid: { ...config.grid },
+    output: { ...config.output },
+  };
+}
+
+export function presetFileName(date = new Date()): string {
+  const pad = (value: number): string => String(value).padStart(2, '0');
+  return `framed-presets-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}.json`;
+}
+
+export class PresetStore {
+  private presets: Preset[] = [];
+
+  constructor() {
+    this.presets = this.read();
+  }
+
+  get list(): readonly Preset[] {
+    return this.presets;
+  }
+
+  get count(): number {
+    return this.presets.length;
+  }
+
+  save(name: string, config: RenderConfig): SavePresetResult {
+    const cleanName = name.trim().slice(0, PRESET_NAME_MAX);
+    if (!cleanName) return { ok: false, error: '请输入预设名称' };
+    if (this.presets.length >= PRESET_LIMIT) {
+      return { ok: false, error: `最多保存 ${PRESET_LIMIT} 个预设，请先删除旧的` };
+    }
+    const presetConfig = createPresetConfig(config);
+    const hasLogo = presetConfig.blocks.some((block) => block.type === 'logo');
+    const { name: uniqueName, renamed } = uniquePresetName(
+      cleanName,
+      this.presets.map((preset) => preset.name),
+    );
+    const preset: Preset = {
+      id: nextPresetId(),
+      name: uniqueName,
+      createdAt: new Date().toISOString(),
+      config: presetConfig,
+    };
+    const bytes = presetSizeBytes(preset);
+    if (bytes > PRESET_LOGO_LIMIT) {
+      return {
+        ok: false,
+        error: hasLogo ? '预设中的 Logo 图片超过 2MB，未保存' : '预设体积超过 2MB，未保存',
+      };
+    }
+    const previous = this.presets.slice();
+    this.presets = [...this.presets, preset];
+    if (!this.persist()) {
+      this.presets = previous;
+      return { ok: false, error: '浏览器本地存储已满，保存失败' };
+    }
+    return { ok: true, preset, renamed, hasLogo, bytes };
+  }
+
+  remove(id: string): Preset | null {
+    const index = this.presets.findIndex((preset) => preset.id === id);
+    if (index < 0) return null;
+    const previous = this.presets.slice();
+    const [removed] = this.presets.splice(index, 1);
+    if (!removed) return null;
+    if (!this.persist()) {
+      this.presets = previous;
+      console.warn('[framed] 删除预设后写入 localStorage 失败');
+      return null;
+    }
+    return removed;
+  }
+
+  exportJson(): string {
+    return JSON.stringify({ version: PRESET_VERSION, presets: this.presets }, null, 2);
+  }
+
+  importJson(text: string): ImportPresetsResult {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { added: 0, skipped: 0, renamed: 0, error: '不是有效的 JSON 文件' };
+    }
+    let rawList: unknown[] | null = null;
+    if (Array.isArray(parsed)) {
+      rawList = parsed;
+    } else if (isRecord(parsed) && Array.isArray(parsed.presets)) {
+      if (parsed.version !== undefined && parsed.version !== PRESET_VERSION) {
+        return { added: 0, skipped: 0, renamed: 0, error: '不支持的预设文件版本' };
+      }
+      rawList = parsed.presets;
+    }
+    if (!rawList) {
+      return { added: 0, skipped: 0, renamed: 0, error: 'JSON 结构无效：缺少 presets 数组' };
+    }
+    const previous = this.presets.slice();
+    const usedIds = new Set(this.presets.map((preset) => preset.id));
+    let added = 0;
+    let skipped = 0;
+    let renamed = 0;
+    for (const raw of rawList) {
+      if (this.presets.length >= PRESET_LIMIT) {
+        skipped += 1;
+        continue;
+      }
+      const preset = normalizePreset(raw);
+      if (!preset) {
+        skipped += 1;
+        continue;
+      }
+      if (presetSizeBytes(preset) > PRESET_LOGO_LIMIT) {
+        skipped += 1;
+        continue;
+      }
+      const nameInfo = uniquePresetName(
+        preset.name,
+        this.presets.map((item) => item.name),
+      );
+      let id = preset.id;
+      if (usedIds.has(id)) id = nextPresetId();
+      usedIds.add(id);
+      this.presets.push({ ...preset, id, name: nameInfo.name });
+      added += 1;
+      if (nameInfo.renamed) renamed += 1;
+    }
+    if (added > 0 && !this.persist()) {
+      this.presets = previous;
+      return { added: 0, skipped, renamed: 0, error: '浏览器本地存储已满，导入失败' };
+    }
+    return { added, skipped, renamed };
+  }
+
+  private read(): Preset[] {
+    try {
+      if (typeof localStorage === 'undefined') return [];
+      const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed: unknown = JSON.parse(raw);
+      const list = Array.isArray(parsed)
+        ? parsed
+        : isRecord(parsed) && Array.isArray(parsed.presets)
+          ? parsed.presets
+          : null;
+      if (!list) {
+        console.warn('[framed] 预设存储格式无效，已忽略');
+        return [];
+      }
+      const presets: Preset[] = [];
+      for (const item of list) {
+        if (presets.length >= PRESET_LIMIT) break;
+        const preset = normalizePreset(item);
+        if (preset) presets.push(preset);
+        else console.warn('[framed] 忽略损坏的预设数据', item);
+      }
+      return presets;
+    } catch (error) {
+      console.warn('[framed] 读取预设失败，已忽略损坏数据', error);
+      return [];
+    }
+  }
+
+  private persist(): boolean {
+    try {
+      localStorage.setItem(
+        PRESET_STORAGE_KEY,
+        JSON.stringify({ version: PRESET_VERSION, presets: this.presets }),
+      );
+      return true;
+    } catch (error) {
+      console.warn('[framed] 写入预设失败', error);
+      return false;
+    }
+  }
+}

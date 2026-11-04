@@ -124,6 +124,7 @@ fn compose(photo: &RgbaImage, config: &RenderConfig) -> Result<RenderOutput> {
     let canvas_w = canvas.width() as f32;
     let canvas_h = canvas.height() as f32;
     let mut blocks: Vec<BlockRect> = Vec::new();
+    let font_set = crate::fonts::snapshot();
 
     for block in &config.blocks {
         if !block.visible() {
@@ -139,9 +140,11 @@ fn compose(photo: &RgbaImage, config: &RenderConfig) -> Result<RenderOutput> {
                     &text.text,
                     text.font,
                     text.weight,
+                    text.custom_font.as_deref(),
                     font_size,
                     text.letter_spacing,
                     text.line_height.clamp(0.5, 4.0),
+                    &font_set,
                 );
                 if layout.is_empty() {
                     continue;
@@ -163,6 +166,7 @@ fn compose(photo: &RgbaImage, config: &RenderConfig) -> Result<RenderOutput> {
                     parse_color(&text.color),
                     text.opacity,
                     text.shadow,
+                    &font_set,
                 );
                 blocks.push(BlockRect {
                     id: text.id.clone(),

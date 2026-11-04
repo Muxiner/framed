@@ -30,7 +30,9 @@ import {
   type TextAreaHandle,
   type ToggleHandle,
 } from './fields';
+import { formatFontDate, formatFontSize, type CustomFontMeta } from './fonts';
 import { icon } from './icons';
+import { PresetDialog } from './preset-dialog';
 import { SAMPLES, sampleThumb, sampleUrl, type SampleId } from './samples';
 
 const TEMPLATE_ORDER: FrameTemplate[] = ['none', 'white', 'polaroid', 'film', 'black'];
@@ -79,6 +81,7 @@ export class LeftPanel {
   private readonly editor: Editor;
   private readonly photoInput: HTMLInputElement;
   private readonly logoInput: HTMLInputElement;
+  private readonly presetDialog: PresetDialog;
 
   private photoSection!: SectionHandle;
   private photoThumb!: HTMLImageElement;
@@ -123,6 +126,15 @@ export class LeftPanel {
   private wmColor!: ColorHandle;
   private wmEmpty!: HTMLElement;
 
+  private fontSection!: SectionHandle;
+  private readonly fontInput: HTMLInputElement;
+  private fontUploadButton!: HTMLButtonElement;
+  private fontList!: HTMLElement;
+  private fontEmpty!: HTMLElement;
+  private fontRows = new Map<string, HTMLElement>();
+  private fontKey = '';
+  private fontBusy = false;
+
   private logoSection!: SectionHandle;
   private logoEmpty!: HTMLElement;
   private logoFilled!: HTMLElement;
@@ -133,7 +145,12 @@ export class LeftPanel {
 
   constructor(editor: Editor) {
     this.editor = editor;
+    this.presetDialog = new PresetDialog(editor);
     this.photoInput = this.makeFileInput('image/*', (files) => void editor.importFiles(files), true);
+    this.fontInput = this.makeFileInput('.ttf,.otf', (files) => {
+      const file = files[0];
+      if (file) void editor.uploadFont(file);
+    });
     this.logoInput = this.makeFileInput('image/png,image/jpeg,image/webp', (files) => {
       const file = files[0];
       if (file) void editor.uploadLogo(file);
@@ -155,6 +172,7 @@ export class LeftPanel {
     const frame = this.buildFrameSection();
     const blocks = this.buildBlocksSection();
     const watermark = this.buildWatermarkSection();
+    const font = this.buildFontSection();
     const logo = this.buildLogoSection();
 
     this.root = h('aside', { class: 'panel panel-left', ariaLabel: '控制栏' }, [
@@ -166,6 +184,7 @@ export class LeftPanel {
         frame.root,
         blocks,
         watermark.root,
+        font.root,
         logo.root,
         h('p', { class: 'panel-foot mono', text: '框影 FRAMED · BUILD 0.1.0' }),
       ]),
@@ -479,11 +498,21 @@ export class LeftPanel {
     this.holesRow = this.holesField.root;
     this.holesRow.hidden = true;
 
+    const presetButton = h('button', {
+      class: 'sec-action-btn',
+      html: `${icon('sparkle', 12)}<span>预设</span>`,
+      title: '自定义预设 / 模板',
+      ariaLabel: '打开自定义预设',
+      attrs: { type: 'button' },
+    });
+    presetButton.addEventListener('click', () => this.presetDialog.open());
+
     this.frameSection = section({
       index: '02',
       title: '边框',
       badge: TEMPLATE_LABELS.white,
       open: true,
+      actions: [presetButton],
       body: h('div', {}, [
         cards,
         this.marginField.root,
@@ -660,7 +689,8 @@ export class LeftPanel {
       value: 'sans',
       onChange: (value) => {
         const block = this.watermarkBlock(this.editor.state);
-        if (block) this.editor.updateTextBlock(block.id, { font: value });
+        // 选择内置字体时清空自定义字体引用（与检查器的字体下拉一致）。
+        if (block) this.editor.updateTextBlock(block.id, { font: value, customFont: null }, { discrete: true });
       },
     });
     this.wmSize = sliderField({
@@ -704,6 +734,86 @@ export class LeftPanel {
 
   private logoBlock(state: EditorState): Block | null {
     return state.config?.blocks.find((block) => block.type === 'logo') ?? null;
+  }
+
+  private buildFontSection(): SectionHandle {
+    this.fontUploadButton = textButton('上传字体', {
+      icon: 'upload',
+      className: 'btn-block',
+      title: '上传 .ttf / .otf 字体（≤8MB）',
+      onClick: () => this.fontInput.click(),
+    });
+    this.fontList = h('div', { class: 'font-list', role: 'list', ariaLabel: '自定义字体' });
+    this.fontEmpty = h('div', { class: 'font-empty' }, [
+      h('span', { class: 'font-empty-ico', html: icon('text', 20) }),
+      h('p', { class: 'font-empty-title', text: '还没有上传字体' }),
+      h('p', { class: 'font-empty-hint', text: '上传 ttf / otf 后可在检查器「字体」中选择。' }),
+    ]);
+
+    this.fontSection = section({
+      index: '05',
+      title: '字体',
+      open: true,
+      body: h('div', {}, [
+        this.fontInput,
+        this.fontUploadButton,
+        h('p', {
+          class: 'sec-note',
+          text: '支持 ttf / otf，≤8MB；网页端刷新后仍保留。上传时若选中文字块会自动应用。',
+        }),
+        this.fontEmpty,
+        this.fontList,
+      ]),
+    });
+    return this.fontSection;
+  }
+
+  private buildFontRow(font: CustomFontMeta): HTMLElement {
+    const name = h('span', { class: 'font-name', text: font.name, title: font.name });
+    const meta = h('span', {
+      class: 'font-meta mono',
+      text: `${formatFontSize(font.size)} · ${formatFontDate(font.addedAt)}`,
+    });
+    const remove = h('button', {
+      class: 'font-delete',
+      html: icon('close', 12),
+      title: '删除字体',
+      ariaLabel: `删除字体 ${font.name}`,
+      attrs: { type: 'button' },
+    });
+    remove.addEventListener('click', (event) => {
+      event.stopPropagation();
+      void this.editor.deleteFont(font.id);
+    });
+    return h('div', { class: 'font-item', role: 'listitem' }, [
+      h('div', { class: 'font-info' }, [name, meta]),
+      remove,
+    ]);
+  }
+
+  private syncFonts(state: EditorState): void {
+    const key = state.customFonts
+      .map((font) => `${font.id}:${font.name}:${font.size}:${font.addedAt}`)
+      .join('|');
+    if (key !== this.fontKey) {
+      this.fontKey = key;
+      this.fontRows.clear();
+      this.fontList.replaceChildren();
+      for (const font of state.customFonts) {
+        const row = this.buildFontRow(font);
+        this.fontRows.set(font.id, row);
+        this.fontList.append(row);
+      }
+    }
+    this.fontEmpty.hidden = state.customFonts.length > 0;
+    this.fontList.hidden = state.customFonts.length === 0;
+    this.fontSection.setBadge(state.customFonts.length > 0 ? String(state.customFonts.length) : null);
+    if (this.fontBusy !== state.fontBusy) {
+      this.fontBusy = state.fontBusy;
+      this.fontUploadButton.disabled = state.fontBusy;
+      const label = this.fontUploadButton.querySelector('span');
+      if (label) setText(label, state.fontBusy ? '上传中…' : '上传字体');
+    }
   }
 
   private buildLogoSection(): SectionHandle {
@@ -753,7 +863,7 @@ export class LeftPanel {
     ]);
 
     this.logoSection = section({
-      index: '05',
+      index: '06',
       title: 'Logo',
       open: true,
       body: h('div', {}, [
@@ -837,6 +947,9 @@ export class LeftPanel {
 
     // 内容块
     this.syncBlocks(state);
+
+    // 字体
+    this.syncFonts(state);
 
     // 水印
     const watermark = this.watermarkBlock(state);

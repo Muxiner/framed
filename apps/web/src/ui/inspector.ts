@@ -19,22 +19,23 @@ import {
 import type { Editor, EditorState } from './editor';
 import {
   colorField,
+  groupedSelectField,
   iconButton,
   numberField,
   segmentedField,
-  selectField,
   sliderField,
   textButton,
   textareaField,
   toggleField,
   type ColorHandle,
   type NumberFieldHandle,
+  type GroupedSelectHandle,
   type SegmentedHandle,
-  type SelectHandle,
   type SliderHandle,
   type TextAreaHandle,
   type ToggleHandle,
 } from './fields';
+import type { CustomFontMeta } from './fonts';
 import { icon } from './icons';
 import { REDO_SHORTCUT, UNDO_SHORTCUT } from './platform';
 
@@ -62,7 +63,7 @@ interface SelectedPanel {
   tag: HTMLElement;
   visibility: HTMLButtonElement;
   text?: TextAreaHandle;
-  font?: SelectHandle<FontFamily>;
+  font?: GroupedSelectHandle;
   weight?: SegmentedHandle<WeightKey>;
   size?: SliderHandle;
   lineHeight?: SliderHandle;
@@ -302,7 +303,8 @@ export class Inspector {
     this.empty.root.hidden = true;
     this.selectedHost.hidden = false;
 
-    const signature = `${block.id}:${block.type}`;
+    const customFontSignature = state.customFonts.map((font) => `${font.id}:${font.name}`).join('|');
+    const signature = `${block.id}:${block.type}:${customFontSignature}`;
     if (!this.panel || this.panel.signature !== signature) {
       this.panel = this.buildPanel(block);
       this.selectedHost.replaceChildren(this.panel.root);
@@ -343,15 +345,48 @@ export class Inspector {
         hint: '支持换行 · 输入即时生效',
         onInput: (value) => this.editor.updateTextBlock(block.id, { text: value }),
       });
-      const font = selectField<FontFamily>({
+      const customFonts = this.editor.state.customFonts;
+      const font = groupedSelectField({
         label: '字体',
-        options: [
-          { value: 'sans', label: FONT_LABELS.sans },
-          { value: 'mono', label: FONT_LABELS.mono },
-          { value: 'cjk', label: FONT_LABELS.cjk },
+        ariaLabel: '字体',
+        className: 'font-select',
+        groups: [
+          {
+            label: '内置字体',
+            options: [
+              { value: 'sans', label: FONT_LABELS.sans },
+              { value: 'mono', label: FONT_LABELS.mono },
+              { value: 'cjk', label: FONT_LABELS.cjk },
+            ],
+          },
+          ...(customFonts.length > 0
+            ? [
+                {
+                  label: '自定义',
+                  options: customFonts.map((item) => ({
+                    value: `custom:${item.id}`,
+                    label: item.name,
+                  })),
+                },
+              ]
+            : []),
         ],
-        value: block.font,
-        onChange: (value) => this.editor.updateTextBlock(block.id, { font: value }),
+        value: fontSelectValue(block, customFonts),
+        onChange: (value) => {
+          if (value.startsWith('custom:')) {
+            this.editor.updateTextBlock(
+              block.id,
+              { customFont: value.slice('custom:'.length) },
+              { discrete: true },
+            );
+          } else {
+            this.editor.updateTextBlock(
+              block.id,
+              { font: value as FontFamily, customFont: null },
+              { discrete: true },
+            );
+          }
+        },
       });
       const weight = segmentedField<WeightKey>({
         label: '字重',
@@ -702,7 +737,7 @@ export class Inspector {
 
     if (block.type === 'text') {
       panel.text?.setValue(block.text);
-      panel.font?.setValue(block.font);
+      panel.font?.setValue(fontSelectValue(block, this.editor.state.customFonts));
       panel.weight?.setValue(String(block.weight) as WeightKey);
       panel.size?.setValue(block.size);
       panel.lineHeight?.setValue(block.lineHeight);
@@ -743,6 +778,18 @@ export class Inspector {
       toggleClass(button, 'is-active', Math.abs(block.x - ax) < 0.015 && Math.abs(block.y - ay) < 0.015);
     }
   }
+}
+
+interface FontBlockLike {
+  font: FontFamily;
+  customFont?: string | null;
+}
+
+function fontSelectValue(block: FontBlockLike, customFonts: readonly CustomFontMeta[]): string {
+  if (block.customFont && customFonts.some((font) => font.id === block.customFont)) {
+    return `custom:${block.customFont}`;
+  }
+  return block.font;
 }
 
 function stepOf(event: MouseEvent): number {

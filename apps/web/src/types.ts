@@ -31,6 +31,8 @@ export interface TextBlock extends BlockBase {
   type: 'text';
   text: string;
   font: FontFamily;
+  /** 用户上传字体 id（可选）；缺字形时按 font 回退。 */
+  customFont?: string | null;
   weight: 400 | 600 | 700;
   size: number;
   lineHeight: number;
@@ -144,6 +146,10 @@ export interface Engine {
   exportImage(config: RenderConfig, suggestedName: string): Promise<ExportResult>;
   /** 批量导出：网页端逐张下载，桌面端选目录后一次写入。 */
   exportBatch(items: BatchExportItem[]): Promise<BatchExportResult>;
+  /** 注册用户字体（ttf/otf），之后文本块用 customFont 引用该 id。 */
+  registerFont(id: string, bytes: Uint8Array): Promise<void>;
+  /** 移除用户字体。 */
+  removeFont(id: string): Promise<void>;
 }
 
 export const TEMPLATE_LABELS: Record<FrameTemplate, string> = {

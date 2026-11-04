@@ -96,6 +96,14 @@ class TauriEngine implements Engine {
     return path ? { path } : {};
   }
 
+  async registerFont(id: string, bytes: Uint8Array): Promise<void> {
+    await core().invoke('register_font', { id, dataB64: toBase64(bytes) });
+  }
+
+  async removeFont(id: string): Promise<void> {
+    await core().invoke('remove_font', { id });
+  }
+
   async exportBatch(items: BatchExportItem[]): Promise<BatchExportResult> {
     const result = await core().invoke<{
       saved: number;

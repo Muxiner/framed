@@ -6,13 +6,13 @@
 use ab_glyph::{point, Font, PxScale, ScaleFont};
 
 use crate::config::{AnchorY, FontFamily, TextAlign};
-use crate::fonts::{fonts, Face};
+use crate::fonts::{FaceRef, FontSet};
 use crate::imageops::blend_pixel;
 use image::RgbaImage;
 
 #[derive(Debug, Clone)]
 struct PlacedGlyph {
-    face: Face,
+    face: FaceRef,
     ch: char,
     /// 行内水平位置（像素）。
     x: f32,
@@ -41,15 +41,17 @@ impl TextLayout {
 }
 
 /// 逐字排版。`letter_spacing` 以 em 为单位；`line_height` 为字号的倍数。
+#[allow(clippy::too_many_arguments)]
 pub fn layout_text(
     text: &str,
     family: FontFamily,
     weight: u16,
+    custom_font: Option<&str>,
     font_size: f32,
     letter_spacing: f32,
     line_height: f32,
+    font_set: &FontSet,
 ) -> TextLayout {
-    let font_set = fonts();
     let scale = PxScale::from(font_size.max(1.0));
     let spacing = letter_spacing * font_size;
 
@@ -66,7 +68,7 @@ pub fn layout_text(
             if ch == '\r' {
                 continue;
             }
-            let face = font_set.face_for(family, weight, ch);
+            let face = font_set.resolve(family, weight, custom_font, ch);
             let font = font_set.get(face);
             let scaled = font.as_scaled(scale);
             if !has_glyph {
@@ -131,6 +133,7 @@ pub fn draw_text_block(
     color: [f32; 4],
     opacity: f32,
     shadow: bool,
+    font_set: &FontSet,
 ) {
     if layout.is_empty() {
         return;
@@ -146,7 +149,6 @@ pub fn draw_text_block(
     let mask_h = (layout.height + pad * 2.0).ceil().max(1.0) as usize;
     let mut mask = vec![0.0_f32; mask_w * mask_h];
 
-    let font_set = fonts();
     let scale = PxScale::from(layout.font_size.max(1.0));
     let mut line_top = 0.0_f32;
 
@@ -278,8 +280,17 @@ mod tests {
 
     #[test]
     fn measures_multiline_text() {
-        let layout =
-            layout_text("SONY α7 IV\n35mm · f/2.8", FontFamily::Mono, 400, 24.0, 0.0, 1.35);
+        let fonts = crate::fonts::snapshot();
+        let layout = layout_text(
+            "SONY α7 IV\n35mm · f/2.8",
+            FontFamily::Mono,
+            400,
+            None,
+            24.0,
+            0.0,
+            1.35,
+            &fonts,
+        );
         assert!(layout.width > 0.0);
         assert!((layout.height - 24.0 * 1.35 * 2.0).abs() < 0.01);
     }
@@ -294,7 +305,8 @@ mod tests {
 
     #[test]
     fn renders_glyph_coverage() {
-        let layout = layout_text("A", FontFamily::Sans, 400, 64.0, 0.0, 1.2);
+        let fonts = crate::fonts::snapshot();
+        let layout = layout_text("A", FontFamily::Sans, 400, None, 64.0, 0.0, 1.2, &fonts);
         let mut canvas = RgbaImage::new(200, 100);
         draw_text_block(
             &mut canvas,
@@ -303,6 +315,7 @@ mod tests {
             [0.0, 0.0, 0.0, 1.0],
             1.0,
             false,
+            &fonts,
         );
         let covered = canvas.pixels().filter(|pixel| pixel[3] > 0).count();
         assert!(covered > 50, "文字应当画出可见像素，实际 {covered}");

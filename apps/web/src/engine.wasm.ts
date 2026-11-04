@@ -23,6 +23,8 @@ interface WasmExports {
   framed_free(ptr: number, len: number): void;
   framed_probe(ptr: number, len: number): number;
   framed_prepare(ptr: number, len: number, maxDim: number): number;
+  framed_register_font(idPtr: number, idLen: number, dataPtr: number, dataLen: number): number;
+  framed_remove_font(ptr: number, len: number): number;
   framed_render_preview(cfgPtr: number, cfgLen: number): number;
   framed_default_config(ptr: number, len: number): number;
   framed_render(imgPtr: number, imgLen: number, cfgPtr: number, cfgLen: number): number;
@@ -185,6 +187,28 @@ class WasmEngine implements Engine {
     const mime = config.output.format === 'jpeg' ? 'image/jpeg' : 'image/png';
     downloadBlob(rendered.png, suggestedName, mime);
     return {};
+  }
+
+  async registerFont(id: string, bytes: Uint8Array): Promise<void> {
+    const idBytes = encoder.encode(id);
+    const idPtr = writeBytes(this.exports, idBytes);
+    const dataPtr = writeBytes(this.exports, bytes);
+    try {
+      parsePacked(this.exports, this.exports.framed_register_font(idPtr, idBytes.length, dataPtr, bytes.length));
+    } finally {
+      this.exports.framed_free(dataPtr, bytes.length);
+      this.exports.framed_free(idPtr, idBytes.length);
+    }
+  }
+
+  async removeFont(id: string): Promise<void> {
+    const idBytes = encoder.encode(id);
+    const idPtr = writeBytes(this.exports, idBytes);
+    try {
+      parsePacked(this.exports, this.exports.framed_remove_font(idPtr, idBytes.length));
+    } finally {
+      this.exports.framed_free(idPtr, idBytes.length);
+    }
   }
 
   async exportBatch(items: BatchExportItem[]): Promise<BatchExportResult> {

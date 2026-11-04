@@ -54,6 +54,8 @@ const NUDGE_FINE = 1 / 144;
 const NUDGE_COARSE = 1 / 12;
 
 window.addEventListener('keydown', (event) => {
+  // 模态弹层（预设等）自己处理 Esc / Tab，并屏蔽全局快捷键。
+  if (document.body.classList.contains('modal-open')) return;
   const modifier = event.metaKey || event.ctrlKey;
   const key = event.key.toLowerCase();
   // 撤销 / 重做：输入框聚焦时也走应用级历史（先提交当前文字编辑再退一步）。

@@ -95,14 +95,19 @@ function defaultBlocks(template: FrameTemplate, exif: ExifInfo): Block[] {
   ];
 }
 
+const mockCustomFamilies = new Map<string, string>();
+
 function fontStack(block: TextBlock): string {
+  let base: string;
   if (block.font === 'mono') {
-    return 'ui-monospace, "SF Mono", "JetBrains Mono", "PingFang SC", monospace';
+    base = 'ui-monospace, "SF Mono", "JetBrains Mono", "PingFang SC", monospace';
+  } else if (block.font === 'cjk') {
+    base = '"PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif';
+  } else {
+    base = '-apple-system, "Inter", "PingFang SC", "Microsoft YaHei", sans-serif';
   }
-  if (block.font === 'cjk') {
-    return '"PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif';
-  }
-  return '-apple-system, "Inter", "PingFang SC", "Microsoft YaHei", sans-serif';
+  const family = block.customFont ? mockCustomFamilies.get(block.customFont) : undefined;
+  return family ? `"${family}", ${base}` : base;
 }
 
 function roundRectPath(
@@ -265,6 +270,7 @@ class MockEngine implements Engine {
   private photos = new Map<string, { url: string; img: HTMLImageElement; info: PhotoInfo }>();
   private currentId: string | null = null;
   private logos = new Map<string, HTMLImageElement>();
+  private customFaces = new Map<string, FontFace>();
 
   async loadImage(bytes: Uint8Array, id = `mock-${Date.now().toString(36)}-${this.photos.size}`): Promise<PhotoInfo> {
     const blob = new Blob([bytes as unknown as BlobPart]);
@@ -421,6 +427,22 @@ class MockEngine implements Engine {
     anchor.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     return {};
+  }
+
+  async registerFont(id: string, bytes: Uint8Array): Promise<void> {
+    const family = `FramedMockFont-${id}`;
+    const face = new FontFace(family, bytes as unknown as ArrayBuffer);
+    await face.load();
+    document.fonts.add(face);
+    this.customFaces.set(id, face);
+    mockCustomFamilies.set(id, family);
+  }
+
+  async removeFont(id: string): Promise<void> {
+    const face = this.customFaces.get(id);
+    if (face) document.fonts.delete(face);
+    this.customFaces.delete(id);
+    mockCustomFamilies.delete(id);
   }
 
   async exportBatch(items: BatchExportItem[]): Promise<BatchExportResult> {

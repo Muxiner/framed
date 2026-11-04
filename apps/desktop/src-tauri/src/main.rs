@@ -293,6 +293,25 @@ fn select_image(
     Ok(info)
 }
 
+/// 注册用户字体（ttf/otf）。
+#[tauri::command(async)]
+fn register_font(id: String, data_b64: String) -> Result<(), String> {
+    let bytes = decode_base64(&data_b64)?;
+    framed_core::register_user_font(&id, &bytes)
+}
+
+/// 移除用户字体。
+#[tauri::command(async)]
+fn remove_font(id: String) {
+    framed_core::remove_user_font(&id);
+}
+
+/// 当前进程内已注册的用户字体 id。
+#[tauri::command(async)]
+fn list_fonts() -> Vec<String> {
+    framed_core::user_font_ids()
+}
+
 /// 依据 EXIF 与模板生成默认 RenderConfig（JSON 字符串）。
 #[tauri::command(async)]
 fn default_config(photo_json: String, template: String) -> Result<String, String> {
@@ -405,6 +424,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             load_image,
             select_image,
+            register_font,
+            remove_font,
+            list_fonts,
             default_config,
             render_image,
             export_image,
@@ -502,6 +524,43 @@ mod tests {
         let meta: Value = serde_json::from_str(&rendered.meta_json).unwrap();
         assert_eq!(meta["ok"], Value::Bool(true));
         assert!(meta["width"].as_u64().unwrap() >= 4);
+    }
+
+    /// 用户字体注册后参与预览渲染；移除/未知 id 时回退内置字体。
+    #[test]
+    fn custom_font_changes_preview_output() {
+        const SAMPLE: &[u8] = include_bytes!("../../../../crates/core/tests/fixtures/sample.jpg");
+        const FONT: &[u8] =
+            include_bytes!("../../../../crates/core/assets/fonts/JetBrainsMono-Regular.ttf");
+
+        let id = "desktop-test-font";
+        framed_core::register_user_font(id, FONT).expect("注册用户字体应成功");
+
+        let photo = framed_core::probe(SAMPLE).expect("probe 应成功");
+        let config = framed_core::default_config(&photo, framed_core::FrameTemplate::White);
+        let prepared =
+            framed_core::prepare_photo(SAMPLE, PREVIEW_PHOTO_DIM).expect("prepare 应成功");
+
+        let config_json = serde_json::to_string(&config).unwrap();
+        let baseline = render_preview_photo(&prepared, &config_json).expect("基线渲染应成功");
+
+        let mut custom = config.clone();
+        let camera = custom
+            .blocks
+            .iter_mut()
+            .find(|block| block.id() == "camera")
+            .expect("默认配置应有 camera 块");
+        if let framed_core::Block::Text(text) = camera {
+            text.custom_font = Some(id.to_string());
+        }
+        let custom_json = serde_json::to_string(&custom).unwrap();
+        let with_font =
+            render_preview_photo(&prepared, &custom_json).expect("自定义字体渲染应成功");
+        assert_ne!(baseline.bytes, with_font.bytes, "自定义字体应改变渲染结果");
+
+        framed_core::remove_user_font(id);
+        let fallback = render_preview_photo(&prepared, &custom_json).expect("回退渲染应成功");
+        assert_eq!(baseline.bytes, fallback.bytes, "移除字体后应回退到内置字体");
     }
 
     /// 批量导出文件名过滤路径分隔符，防止写出目录。

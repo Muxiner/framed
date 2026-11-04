@@ -175,6 +175,8 @@ pub struct TextBlock {
     pub visible: bool,
     pub text: String,
     pub font: FontFamily,
+    /// 用户上传字体 id（可选）；缺失字形时仍按 font 回退。
+    pub custom_font: Option<String>,
     pub weight: u16,
     /// 字号倍数，基准字号 = min(画布宽, 画布高) * 0.018。
     pub size: f32,
@@ -197,6 +199,7 @@ impl Default for TextBlock {
             visible: true,
             text: String::new(),
             font: FontFamily::Sans,
+            custom_font: None,
             weight: 400,
             size: 1.0,
             line_height: 1.35,

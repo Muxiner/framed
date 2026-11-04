@@ -22,6 +22,7 @@ export function section(opts: {
   title: string;
   badge?: string;
   open?: boolean;
+  actions?: HTMLElement[];
   body: HTMLElement;
 }): SectionHandle {
   const id = nextId('sec');
@@ -45,7 +46,10 @@ export function section(opts: {
       chevron,
     ],
   );
-  const root = h('section', { class: 'sec' }, [h('div', { class: 'sec-head' }, [toggle]), body]);
+  const actions = opts.actions && opts.actions.length > 0
+    ? h('div', { class: 'sec-actions' }, opts.actions)
+    : null;
+  const root = h('section', { class: 'sec' }, [h('div', { class: 'sec-head' }, [toggle, actions]), body]);
 
   const apply = (): void => {
     toggleClass(root, 'is-open', open);
@@ -526,6 +530,57 @@ export function textareaField(opts: TextAreaOptions): TextAreaHandle {
     setDisabled(disabled: boolean) {
       input.disabled = disabled;
       toggleClass(root, 'is-disabled', disabled);
+    },
+  };
+}
+
+// --------------------------------------------------------------------------- 分组下拉
+
+export interface SelectGroup {
+  label: string;
+  options: SelectOption<string>[];
+}
+
+export interface GroupedSelectOptions {
+  label: string;
+  groups: SelectGroup[];
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel?: string;
+  className?: string;
+  hint?: string;
+}
+
+export interface GroupedSelectHandle {
+  root: HTMLElement;
+  setValue(value: string): void;
+}
+
+export function groupedSelectField(opts: GroupedSelectOptions): GroupedSelectHandle {
+  const id = nextId('group-select');
+  const select = h('select', {
+    class: `input select${opts.className ? ` ${opts.className}` : ''}`,
+    attrs: { id, 'aria-label': opts.ariaLabel ?? opts.label },
+  });
+  for (const group of opts.groups) {
+    const optgroup = h('optgroup', { attrs: { label: group.label } });
+    for (const option of group.options) {
+      optgroup.append(h('option', { text: option.label, attrs: { value: option.value } }));
+    }
+    select.append(optgroup);
+  }
+  select.value = opts.value;
+  select.addEventListener('change', () => opts.onChange(select.value));
+  const root = h('div', { class: 'field field-inline' }, [
+    h('label', { class: 'field-label', text: opts.label, attrs: { for: id } }),
+    select,
+    opts.hint ? h('p', { class: 'field-hint', text: opts.hint }) : null,
+  ]);
+  return {
+    root,
+    setValue(value: string) {
+      if (document.activeElement === select) return;
+      if (select.value !== value) select.value = value;
     },
   };
 }
