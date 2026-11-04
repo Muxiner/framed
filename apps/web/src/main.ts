@@ -38,7 +38,11 @@ if (mount) mount.replaceWith(app);
 else document.body.append(app);
 document.body.append(bootLayer);
 
+const workspace = app.querySelector('.workspace');
+
 editor.subscribe((state) => {
+  workspace?.classList.toggle('is-left-collapsed', state.leftCollapsed);
+  workspace?.classList.toggle('is-inspector-collapsed', state.inspectorCollapsed);
   const drawerOpen = state.leftOpen || state.inspectorOpen;
   backdrop.hidden = !drawerOpen;
   app.classList.toggle('is-drawer-open', drawerOpen);

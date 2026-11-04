@@ -6,6 +6,7 @@ import type {
   FrameConfig,
   FrameTemplate,
   PhotoShadowConfig,
+  PhotoInfo,
   RenderConfig,
   TextBlock,
 } from '../types';
@@ -29,7 +30,7 @@ export interface BrandStyle {
   template: FrameTemplate;
   wordmark: string;
   preview: BrandPreview;
-  build: (base: RenderConfig) => RenderConfig;
+  build: (base: RenderConfig, photo: PhotoInfo, frameOverride?: FrameConfig) => RenderConfig;
 }
 
 const SHADOW_BASE: PhotoShadowConfig = {
@@ -104,6 +105,8 @@ function taglineBlock(text: string, spec: TextSpec): Block {
 interface Layout {
   template: FrameTemplate;
   frame: Partial<FrameConfig>;
+  /** 强制把文字压在照片上（手机水印样式）。 */
+  overlay?: boolean;
   /** 品牌字标（复用水印块）。 */
   brand: TextSpec;
   camera: TextSpec;
@@ -113,21 +116,74 @@ interface Layout {
   taglineSpec: TextSpec;
 }
 
-function buildStyle(layout: Layout, base: RenderConfig): RenderConfig {
-  const frame: FrameConfig = {
+/** 成品画布几何：底栏顶边与底栏高度（归一化）。 */
+function bandGeometry(frame: FrameConfig, photo: PhotoInfo): { top: number; height: number } {
+  if (frame.template === 'none') return { top: 1, height: 0 };
+  const short = Math.min(photo.width, photo.height);
+  const margin = frame.margin * short;
+  const bottom = margin * frame.bottomRatio;
+  const canvasHeight = photo.height + margin + bottom;
+  return {
+    top: (margin + photo.height) / canvasHeight,
+    height: bottom / canvasHeight,
+  };
+}
+
+const BAND_MIN = 0.075;
+
+function bandText(layout: Layout, frame: FrameConfig, photo: PhotoInfo): {
+  overlay: boolean;
+  brand: TextSpec;
+  tagline: TextSpec;
+  camera: TextSpec;
+  gear: TextSpec;
+  date: TextSpec;
+} {
+  const { top, height } = bandGeometry(frame, photo);
+  const overlay = layout.overlay === true || frame.template === 'none' || height < BAND_MIN;
+  if (overlay) {
+    return {
+      overlay: true,
+      brand: { ...layout.brand, y: 0.795, color: '#ffffff', shadow: true },
+      tagline: { ...layout.taglineSpec, y: 0.885, color: '#f1ede3', shadow: true },
+      camera: { ...layout.camera, y: 0.795, color: '#ffffff', shadow: true },
+      gear: { ...layout.gear, y: 0.855, color: '#ffffff', shadow: true },
+      date: { ...layout.date, y: 0.915, color: '#ffffff', shadow: true },
+    };
+  }
+  const clampY = (value: number, lineCount = 1): number =>
+    Math.min(1 - 0.02 * lineCount, Math.max(0, value));
+  return {
+    overlay: false,
+    brand: { ...layout.brand, y: clampY(top + height * 0.12, 2), shadow: false },
+    tagline: { ...layout.taglineSpec, y: clampY(top + height * 0.68), shadow: false },
+    camera: { ...layout.camera, y: clampY(top + height * 0.08), shadow: false },
+    gear: { ...layout.gear, y: clampY(top + height * 0.44), shadow: false },
+    date: { ...layout.date, y: clampY(top + height * 0.8), shadow: false },
+  };
+}
+
+function buildStyle(
+  layout: Layout,
+  base: RenderConfig,
+  photo: PhotoInfo,
+  frameOverride?: FrameConfig,
+): RenderConfig {
+  const frame: FrameConfig = frameOverride ?? {
     ...base.frame,
     template: layout.template,
     ...layout.frame,
   };
+  const positioned = bandText(layout, frame, photo);
   const blocks: Block[] = base.blocks.map((block) => {
     if (block.type !== 'text') return block;
-    if (block.id === 'watermark') return styleBlock(block, { align: 'left', ...layout.brand });
-    if (block.id === 'camera') return styleBlock(block, layout.camera);
-    if (block.id === 'gear') return styleBlock(block, layout.gear);
-    if (block.id === 'date') return styleBlock(block, layout.date);
+    if (block.id === 'watermark') return styleBlock(block, { align: 'left', ...positioned.brand });
+    if (block.id === 'camera') return styleBlock(block, positioned.camera);
+    if (block.id === 'gear') return styleBlock(block, positioned.gear);
+    if (block.id === 'date') return styleBlock(block, positioned.date);
     return block;
   });
-  const tagline = taglineBlock(layout.tagline, layout.taglineSpec);
+  const tagline = taglineBlock(layout.tagline, positioned.tagline);
   const index = blocks.findIndex((block) => block.id === 'tagline');
   if (index >= 0) blocks[index] = tagline;
   else blocks.push(tagline);
@@ -139,17 +195,23 @@ const INFO_COLOR_LIGHT = '#5f5a52';
 const INFO_COLOR_DARK = '#c9c3b7';
 
 /** 白底三行信息的小字号。 */
-const infoLight = (x: number): { camera: TextSpec; gear: TextSpec; date: TextSpec } => ({
-  camera: { ...INFO_FONT, size: 0.8, color: INFO_COLOR_LIGHT, x, y: 0.855, align: 'right' },
-  gear: { ...INFO_FONT, size: 0.74, color: '#7d776c', x, y: 0.895, align: 'right' },
-  date: { ...INFO_FONT, size: 0.66, color: '#9a9388', x, y: 0.932, align: 'right' },
+const infoLight = (
+  x: number,
+  font: 'sans' | 'mono' = 'mono',
+): { camera: TextSpec; gear: TextSpec; date: TextSpec } => ({
+  camera: { ...INFO_FONT, font, size: 0.8, color: INFO_COLOR_LIGHT, x, align: 'right' },
+  gear: { ...INFO_FONT, font, size: 0.74, color: '#7d776c', x, align: 'right' },
+  date: { ...INFO_FONT, font, size: 0.66, color: '#9a9388', x, align: 'right' },
 });
 
 /** 黑底三行信息的小字号。 */
-const infoDark = (x: number): { camera: TextSpec; gear: TextSpec; date: TextSpec } => ({
-  camera: { ...INFO_FONT, size: 0.78, color: INFO_COLOR_DARK, x, y: 0.855, align: 'right' },
-  gear: { ...INFO_FONT, size: 0.72, color: '#a9a396', x, y: 0.895, align: 'right' },
-  date: { ...INFO_FONT, size: 0.64, color: '#8f8a80', x, y: 0.932, align: 'right' },
+const infoDark = (
+  x: number,
+  font: 'sans' | 'mono' = 'mono',
+): { camera: TextSpec; gear: TextSpec; date: TextSpec } => ({
+  camera: { ...INFO_FONT, font, size: 0.78, color: INFO_COLOR_DARK, x, align: 'right' },
+  gear: { ...INFO_FONT, font, size: 0.72, color: '#a9a396', x, align: 'right' },
+  date: { ...INFO_FONT, font, size: 0.64, color: '#8f8a80', x, align: 'right' },
 });
 
 export const BRAND_STYLES: BrandStyle[] = [
@@ -161,7 +223,7 @@ export const BRAND_STYLES: BrandStyle[] = [
     template: 'white',
     wordmark: 'LEICA',
     preview: { background: '#f6f3ec', photo: 'linear-gradient(135deg,#d9c9a8,#8d9aa0)', mark: '#141414' },
-    build: (base) =>
+    build: (base, photo, frameOverride) =>
       buildStyle(
         {
           template: 'white',
@@ -183,7 +245,7 @@ export const BRAND_STYLES: BrandStyle[] = [
             x: 0.055,
             y: 0.855,
           },
-          ...infoLight(0.945),
+          ...infoLight(0.945, 'sans'),
           tagline: 'LEICA CAMERA · WETZLAR',
           taglineSpec: {
             ...INFO_FONT,
@@ -195,6 +257,8 @@ export const BRAND_STYLES: BrandStyle[] = [
           },
         },
         base,
+        photo,
+        frameOverride,
       ),
   },
   {
@@ -205,7 +269,7 @@ export const BRAND_STYLES: BrandStyle[] = [
     template: 'black',
     wordmark: 'SONY',
     preview: { background: '#0b0b0b', photo: 'linear-gradient(135deg,#2b3038,#52616b)', mark: '#f4f1ea' },
-    build: (base) =>
+    build: (base, photo, frameOverride) =>
       buildStyle(
         {
           template: 'black',
@@ -240,6 +304,8 @@ export const BRAND_STYLES: BrandStyle[] = [
           },
         },
         base,
+        photo,
+        frameOverride,
       ),
   },
   {
@@ -250,7 +316,7 @@ export const BRAND_STYLES: BrandStyle[] = [
     template: 'white',
     wordmark: 'Canon',
     preview: { background: '#fbfaf7', photo: 'linear-gradient(135deg,#d8c3a2,#87979c)', mark: '#c8102e' },
-    build: (base) =>
+    build: (base, photo, frameOverride) =>
       buildStyle(
         {
           template: 'white',
@@ -272,7 +338,7 @@ export const BRAND_STYLES: BrandStyle[] = [
             x: 0.05,
             y: 0.86,
           },
-          ...infoLight(0.95),
+          ...infoLight(0.95, 'sans'),
           tagline: 'EOS SERIES',
           taglineSpec: {
             ...INFO_FONT,
@@ -285,6 +351,8 @@ export const BRAND_STYLES: BrandStyle[] = [
           },
         },
         base,
+        photo,
+        frameOverride,
       ),
   },
   {
@@ -295,7 +363,7 @@ export const BRAND_STYLES: BrandStyle[] = [
     template: 'black',
     wordmark: 'Nikon',
     preview: { background: '#0a0a0a', photo: 'linear-gradient(135deg,#2a2f35,#5a6068)', mark: '#ffd100' },
-    build: (base) =>
+    build: (base, photo, frameOverride) =>
       buildStyle(
         {
           template: 'black',
@@ -330,6 +398,8 @@ export const BRAND_STYLES: BrandStyle[] = [
           },
         },
         base,
+        photo,
+        frameOverride,
       ),
   },
   {
@@ -340,7 +410,7 @@ export const BRAND_STYLES: BrandStyle[] = [
     template: 'film',
     wordmark: 'FUJIFILM',
     preview: { background: '#0b0b0b', photo: 'linear-gradient(135deg,#39424a,#6d7c84)', mark: '#e60012' },
-    build: (base) =>
+    build: (base, photo, frameOverride) =>
       buildStyle(
         {
           template: 'film',
@@ -375,6 +445,8 @@ export const BRAND_STYLES: BrandStyle[] = [
           },
         },
         base,
+        photo,
+        frameOverride,
       ),
   },
   {
@@ -390,10 +462,11 @@ export const BRAND_STYLES: BrandStyle[] = [
       mark: '#ffffff',
       overlay: true,
     },
-    build: (base) =>
+    build: (base, photo, frameOverride) =>
       buildStyle(
         {
           template: 'none',
+          overlay: true,
           frame: {
             margin: 0,
             bottomRatio: 1,
@@ -454,6 +527,8 @@ export const BRAND_STYLES: BrandStyle[] = [
           },
         },
         base,
+        photo,
+        frameOverride,
       ),
   },
   {
@@ -464,7 +539,7 @@ export const BRAND_STYLES: BrandStyle[] = [
     template: 'black',
     wordmark: 'HASSELBLAD',
     preview: { background: '#0a0a0a', photo: 'linear-gradient(135deg,#3a3a36,#6b6a60)', mark: '#ded7c6' },
-    build: (base) =>
+    build: (base, photo, frameOverride) =>
       buildStyle(
         {
           template: 'black',
@@ -498,6 +573,8 @@ export const BRAND_STYLES: BrandStyle[] = [
           },
         },
         base,
+        photo,
+        frameOverride,
       ),
   },
 ];

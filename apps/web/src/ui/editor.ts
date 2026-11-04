@@ -26,7 +26,7 @@ import {
   type CustomFontMeta,
 } from './fonts';
 import type { Preset } from './presets';
-import type { BrandStyle } from './brand-styles';
+import { BRAND_STYLES, type BrandStyle } from './brand-styles';
 import { fetchSample, type SampleId } from './samples';
 import { toast } from './toast';
 
@@ -167,6 +167,9 @@ export interface EditorState {
   zoom: 'fit' | number;
   leftOpen: boolean;
   inspectorOpen: boolean;
+  /** 桌面端左右侧栏是否收起（移动端仍用抽屉）。 */
+  leftCollapsed: boolean;
+  inspectorCollapsed: boolean;
   exporting: boolean;
   exportOpen: boolean;
   exportName: string;
@@ -206,6 +209,8 @@ function initialState(): EditorState {
     zoom: 'fit',
     leftOpen: false,
     inspectorOpen: false,
+    leftCollapsed: false,
+    inspectorCollapsed: false,
     exporting: false,
     exportOpen: false,
     exportName: '',
@@ -936,6 +941,7 @@ export class Editor {
         status: 'ready',
         zoom: 'fit',
       });
+      this.relayoutAppliedStyle();
       this.resetHistory();
       previousBitmap?.close();
       await this.renderPreview();
@@ -1133,7 +1139,7 @@ export class Editor {
     }
     try {
       const base = await engine.defaultConfig(photo, style.template);
-      const next = style.build(base);
+      const next = style.build(base, photo);
       next.output = { ...config.output };
       next.grid = { ...config.grid };
       const ids = new Set(next.blocks.map((block) => block.id));
@@ -1153,6 +1159,38 @@ export class Editor {
       toast(`已应用「${style.name}」风格`, 'success', 2600);
     } catch (error) {
       toast(`样式应用失败：${errorMessage(error)}`, 'error', 4200);
+    }
+  }
+
+  /** 边框/模板/照片变化后，按当前底栏重新摆放品牌样式文字（保留字号/字体/文本）。 */
+  private relayoutAppliedStyle(): void {
+    const config = this.state.config;
+    const photo = this.state.photo;
+    if (!config || !photo) return;
+    const watermark = config.blocks.find((block) => block.id === 'watermark');
+    if (!watermark || watermark.type !== 'text') return;
+    const style = BRAND_STYLES.find((item) => item.wordmark === watermark.text);
+    if (!style) return;
+    try {
+      const styled = style.build(config, photo, config.frame);
+      const current = new Map(config.blocks.map((block) => [block.id, block]));
+      const blocks = styled.blocks.map((block) => {
+        const existing = current.get(block.id);
+        if (block.type === 'text' && existing?.type === 'text') {
+          return {
+            ...block,
+            text: existing.text,
+            size: existing.size,
+            font: existing.font,
+            customFont: existing.customFont ?? null,
+          };
+        }
+        return block;
+      });
+      this.patch({ config: { ...config, blocks } });
+      this.scheduleRender();
+    } catch {
+      // 布局失败不影响边框修改本身。
     }
   }
 
@@ -1180,6 +1218,7 @@ export class Editor {
       config.frame = { ...config.frame, photoShadow: { ...previous.frame.photoShadow } };
       this.beginEdit('template', 'manual');
       this.patch({ config });
+      this.relayoutAppliedStyle();
       this.scheduleRender();
       this.endCoalescedEdit();
     } catch (error) {
@@ -1198,6 +1237,27 @@ export class Editor {
     if (!changed) return;
     this.beginEdit(`frame:${keys.slice().sort().join(',')}`, 'idle', 600);
     this.patch({ config: { ...config, frame: { ...config.frame, ...patch } } });
+    this.relayoutAppliedStyle();
+    this.scheduleRender();
+  }
+
+  /** 一键缩放相机/参数/日期文本字号（base 为缩放前的字号快照）。 */
+  setParameterScale(scale: number, base: Record<string, number>): void {
+    const config = this.state.config;
+    if (!config) return;
+    const ids = new Set(Object.keys(base));
+    let changed = false;
+    const blocks = config.blocks.map((block) => {
+      if (block.type !== 'text' || !ids.has(block.id)) return block;
+      const baseSize = base[block.id];
+      if (typeof baseSize !== 'number') return block;
+      const size = Math.min(8, Math.max(0.1, baseSize * scale));
+      if (Math.abs(size - block.size) > 0.0001) changed = true;
+      return { ...block, size };
+    });
+    if (!changed) return;
+    this.beginEdit('params:scale', 'idle', 700);
+    this.patch({ config: { ...config, blocks } });
     this.scheduleRender();
   }
 
@@ -1493,11 +1553,19 @@ export class Editor {
   // ---------------------------------------------------------------- 布局 / 抽屉
 
   toggleLeft(): void {
-    this.patch({ leftOpen: !this.state.leftOpen, inspectorOpen: false });
+    if (mobileQuery()) {
+      this.patch({ leftOpen: !this.state.leftOpen, inspectorOpen: false });
+      return;
+    }
+    this.patch({ leftCollapsed: !this.state.leftCollapsed });
   }
 
   toggleInspector(): void {
-    this.patch({ inspectorOpen: !this.state.inspectorOpen, leftOpen: false });
+    if (mobileQuery()) {
+      this.patch({ inspectorOpen: !this.state.inspectorOpen, leftOpen: false });
+      return;
+    }
+    this.patch({ inspectorCollapsed: !this.state.inspectorCollapsed });
   }
 
   closeDrawers(): void {

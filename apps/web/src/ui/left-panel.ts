@@ -117,6 +117,10 @@ export class LeftPanel {
   private radiusField!: SliderHandle;
   private holesField!: ToggleHandle;
   private holesRow!: HTMLElement;
+  private paramSizeField!: SliderHandle;
+  private paramBaseSizes: Record<string, number> | null = null;
+  private paramLastStyleId: string | null = null;
+  private paramLastPhotoId: string | null = null;
   private shadowBlock!: HTMLElement;
   private shadowToggle!: ToggleHandle;
   private shadowModeField!: SegmentedHandle<ShadowMode>;
@@ -567,6 +571,17 @@ export class LeftPanel {
       brandStrip.append(card);
     }
 
+    this.paramSizeField = sliderField({
+      label: '参数文字大小',
+      min: 0.6,
+      max: 1.8,
+      step: 0.02,
+      value: 1,
+      format: (value) => `${value.toFixed(2)}×`,
+      ariaLabel: '整体缩放相机、参数、日期文字大小',
+      onInput: (value) => this.scaleParameters(value),
+    });
+
     this.shadowToggle = toggleField({
       label: '照片阴影',
       checked: false,
@@ -673,11 +688,27 @@ export class LeftPanel {
         this.bottomField.root,
         this.backgroundField.root,
         this.radiusField.root,
+        this.paramSizeField.root,
         this.holesRow,
         this.shadowBlock,
       ]),
     });
     return this.frameSection;
+  }
+
+  private scaleParameters(scale: number): void {
+    const config = this.editor.state.config;
+    if (!config) return;
+    if (!this.paramBaseSizes) {
+      const base: Record<string, number> = {};
+      for (const block of config.blocks) {
+        if (block.type === 'text' && ['camera', 'gear', 'date'].includes(block.id)) {
+          base[block.id] = block.size;
+        }
+      }
+      this.paramBaseSizes = base;
+    }
+    this.editor.setParameterScale(scale, this.paramBaseSizes);
   }
 
   private setShadow(patch: Partial<PhotoShadowConfig>): void {
@@ -1123,6 +1154,16 @@ export class LeftPanel {
     for (const entry of this.brandCards) {
       entry.card.disabled = !hasFrame;
       toggleClass(entry.card, 'is-active', state.activeStyleId === entry.id);
+    }
+    if (state.activeStyleId && state.activeStyleId !== this.paramLastStyleId) {
+      this.paramBaseSizes = null;
+      this.paramSizeField.setValue(1);
+    }
+    this.paramLastStyleId = state.activeStyleId;
+    if (state.activePhotoId !== this.paramLastPhotoId) {
+      this.paramBaseSizes = null;
+      this.paramSizeField.setValue(1);
+      this.paramLastPhotoId = state.activePhotoId;
     }
 
     // 内容块

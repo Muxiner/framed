@@ -114,15 +114,15 @@ export class Topbar {
     );
 
     this.leftToggle = iconButton({
-      name: 'sliders',
-      label: '打开控制栏',
-      className: 'mobile-only',
+      name: 'panelLeft',
+      label: '收起控制栏',
+      className: 'panel-toggle',
       onClick: () => editor.toggleLeft(),
     });
     this.inspectorToggle = iconButton({
       name: 'panelRight',
-      label: '打开检查器',
-      className: 'mobile-only',
+      label: '收起检查器',
+      className: 'panel-toggle',
       onClick: () => editor.toggleInspector(),
     });
 
@@ -324,10 +324,17 @@ export class Topbar {
     this.undoButton.setAttribute('aria-disabled', String(!state.canUndo));
     this.redoButton.setAttribute('aria-disabled', String(!state.canRedo));
 
-    toggleClass(this.leftToggle, 'is-active', state.leftOpen);
-    this.leftToggle.setAttribute('aria-pressed', String(state.leftOpen));
-    toggleClass(this.inspectorToggle, 'is-active', state.inspectorOpen);
-    this.inspectorToggle.setAttribute('aria-pressed', String(state.inspectorOpen));
+    const mobile = window.matchMedia('(max-width: 1099.98px)').matches;
+    const leftVisible = mobile ? state.leftOpen : !state.leftCollapsed;
+    const inspectorVisible = mobile ? state.inspectorOpen : !state.inspectorCollapsed;
+    toggleClass(this.leftToggle, 'is-active', leftVisible);
+    this.leftToggle.setAttribute('aria-pressed', String(leftVisible));
+    this.leftToggle.setAttribute('aria-label', mobile ? '打开控制栏' : leftVisible ? '收起控制栏' : '展开控制栏');
+    this.leftToggle.title = this.leftToggle.getAttribute('aria-label') ?? '';
+    toggleClass(this.inspectorToggle, 'is-active', inspectorVisible);
+    this.inspectorToggle.setAttribute('aria-pressed', String(inspectorVisible));
+    this.inspectorToggle.setAttribute('aria-label', mobile ? '打开检查器' : inspectorVisible ? '收起检查器' : '展开检查器');
+    this.inspectorToggle.title = this.inspectorToggle.getAttribute('aria-label') ?? '';
 
     const canExport = state.config !== null && !state.exporting;
     this.exportMain.disabled = !canExport;
