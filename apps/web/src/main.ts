@@ -83,6 +83,11 @@ window.addEventListener('keydown', (event) => {
     }
     return;
   }
+  if (modifier && key === 'a') {
+    event.preventDefault();
+    editor.selectAllText();
+    return;
+  }
   switch (event.key) {
     case 'Escape': {
       if (editor.state.exportOpen) editor.setExportOpen(false);
@@ -110,15 +115,13 @@ window.addEventListener('keydown', (event) => {
     case 'ArrowUp':
     case 'ArrowDown': {
       const config = editor.state.config;
-      const id = editor.state.selectedId;
-      if (!config || !id) return;
-      const block = config.blocks.find((item) => item.id === id);
-      if (!block) return;
+      if (!config) return;
+      if (editor.state.selectedIds.length === 0 && !editor.state.selectedId) return;
       event.preventDefault();
       const step = event.shiftKey ? NUDGE_COARSE : NUDGE_FINE;
       const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0;
       const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0;
-      editor.setBlockPosition(id, block.x + dx, block.y + dy);
+      editor.nudgeSelection(dx, dy);
       break;
     }
     default:

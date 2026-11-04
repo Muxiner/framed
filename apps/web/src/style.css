@@ -3148,3 +3148,94 @@ body.is-photo-dragging {
 .preset-share-code:focus {
   color: var(--text);
 }
+
+/* =========================================================================== 品牌样式 / 照片阴影 / 多选 */
+.sec-mini-label {
+  margin: 2px 0 6px;
+  color: var(--muted-2);
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+}
+.brand-style-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0 0 10px;
+}
+.brand-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #121110;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.14s, background 0.14s;
+}
+.brand-card:hover:not(:disabled) {
+  border-color: rgba(229, 181, 103, 0.45);
+  background: #171513;
+}
+.brand-card:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.brand-swatch {
+  width: 16px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--brand, var(--accent));
+}
+.brand-name {
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.2;
+}
+.brand-tag {
+  color: var(--muted-2);
+  font-size: 8px;
+  line-height: 1.35;
+}
+.shadow-block {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+.shadow-params {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.block-item.is-selected-multi {
+  border-color: rgba(229, 181, 103, 0.32);
+  background: rgba(229, 181, 103, 0.035);
+}
+.insp-multi-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+.insp-multi-hint {
+  margin: 0;
+  color: var(--muted-2);
+  font-size: 9.5px;
+  line-height: 1.7;
+}
+.insp-multi-names {
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.7;
+}
+.insp-multi-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}

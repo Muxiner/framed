@@ -95,6 +95,52 @@ pub enum BlockKind {
     Logo,
 }
 
+/// 照片阴影模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ShadowMode {
+    /// 外阴影（照片背后投影）。
+    #[default]
+    Outer,
+    /// 内阴影（照片边缘内投影）。
+    Inner,
+    /// 内外都有。
+    Both,
+}
+
+/// 照片阴影参数（方向可调）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PhotoShadowConfig {
+    pub enabled: bool,
+    pub mode: ShadowMode,
+    /// 方向：0° = 向右，90° = 向下。
+    pub angle: f32,
+    /// 偏移距离 / 照片短边（0–0.2）。
+    pub distance: f32,
+    /// 模糊半径 / 照片短边（0–0.2）。
+    pub blur: f32,
+    /// 扩散 / 照片短边（-0.1–0.2）。
+    pub spread: f32,
+    pub color: String,
+    pub opacity: f32,
+}
+
+impl Default for PhotoShadowConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: ShadowMode::Outer,
+            angle: 120.0,
+            distance: 0.012,
+            blur: 0.02,
+            spread: 0.0,
+            color: "#000000".to_string(),
+            opacity: 0.28,
+        }
+    }
+}
+
 /// 边框参数。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -108,6 +154,7 @@ pub struct FrameConfig {
     /// 照片圆角 / 照片短边。
     pub radius: f32,
     pub film_holes: bool,
+    pub photo_shadow: PhotoShadowConfig,
 }
 
 impl Default for FrameConfig {
@@ -125,6 +172,7 @@ impl FrameConfig {
             background: template.background().to_string(),
             radius: 0.0,
             film_holes: true,
+            photo_shadow: PhotoShadowConfig::default(),
         }
     }
 }

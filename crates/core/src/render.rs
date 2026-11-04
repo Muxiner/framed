@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{
     parse_color, Block, FrameTemplate, LogoBlock, OutputConfig, OutputFormat, RenderConfig,
+    ShadowMode,
 };
 use crate::exif;
 use crate::imageops;
@@ -114,8 +115,62 @@ fn compose(photo: &RgbaImage, config: &RenderConfig) -> Result<RenderOutput> {
     let background = imageops::to_rgba(parse_color(&config.frame.background));
     let mut canvas = RgbaImage::from_pixel(geom.width.max(1), geom.height.max(1), background);
 
-    let radius = config.frame.radius.clamp(0.0, 0.25) * photo.width().min(photo.height()) as f32;
-    imageops::draw_photo(&mut canvas, photo, geom.photo_x as i32, geom.photo_y as i32, radius);
+    let short_edge = photo.width().min(photo.height()) as f32;
+    let radius = config.frame.radius.clamp(0.0, 0.25) * short_edge;
+    let shadow = &config.frame.photo_shadow;
+    let photo_x = geom.photo_x as f32;
+    let photo_y = geom.photo_y as f32;
+    let photo_w = photo.width() as f32;
+    let photo_h = photo.height() as f32;
+
+    if shadow.enabled {
+        let distance = shadow.distance.clamp(0.0, 0.3) * short_edge;
+        let blur = shadow.blur.clamp(0.0, 0.3) * short_edge;
+        let spread = shadow.spread.clamp(-0.2, 0.3) * short_edge;
+        let angle = shadow.angle.to_radians();
+        let offset_x = angle.cos() * distance;
+        let offset_y = angle.sin() * distance;
+        let color = parse_color(&shadow.color);
+        let opacity = shadow.opacity.clamp(0.0, 1.0);
+        let outer = matches!(shadow.mode, ShadowMode::Outer | ShadowMode::Both);
+        let inner = matches!(shadow.mode, ShadowMode::Inner | ShadowMode::Both);
+
+        if outer {
+            imageops::draw_outer_shadow(
+                &mut canvas,
+                photo_x,
+                photo_y,
+                photo_w,
+                photo_h,
+                radius,
+                offset_x,
+                offset_y,
+                spread,
+                blur,
+                color,
+                opacity,
+            );
+        }
+        imageops::draw_photo(&mut canvas, photo, geom.photo_x as i32, geom.photo_y as i32, radius);
+        if inner {
+            imageops::draw_inner_shadow(
+                &mut canvas,
+                photo_x,
+                photo_y,
+                photo_w,
+                photo_h,
+                radius,
+                offset_x,
+                offset_y,
+                spread,
+                blur,
+                color,
+                opacity,
+            );
+        }
+    } else {
+        imageops::draw_photo(&mut canvas, photo, geom.photo_x as i32, geom.photo_y as i32, radius);
+    }
 
     if config.frame.template == FrameTemplate::Film && config.frame.film_holes {
         draw_film_holes(&mut canvas, &geom);
@@ -349,6 +404,34 @@ mod tests {
         config.output.max_dim = 640;
         let output = render(&bytes, &config).unwrap();
         assert!(output.meta.width.max(output.meta.height) <= 640);
+    }
+
+    fn shadowed_config(mode: crate::config::ShadowMode) -> RenderConfig {
+        let mut config = RenderConfig::default();
+        config.frame.photo_shadow.enabled = true;
+        config.frame.photo_shadow.mode = mode;
+        config.frame.photo_shadow.distance = 0.05;
+        config.frame.photo_shadow.blur = 0.05;
+        config.frame.photo_shadow.spread = 0.02;
+        config.frame.photo_shadow.opacity = 0.7;
+        config.frame.photo_shadow.angle = 120.0;
+        config
+    }
+
+    #[test]
+    fn photo_shadow_modes_change_output() {
+        let bytes = test_image(400, 300);
+        let baseline = render(&bytes, &RenderConfig::default()).unwrap();
+        for mode in [
+            crate::config::ShadowMode::Outer,
+            crate::config::ShadowMode::Inner,
+            crate::config::ShadowMode::Both,
+        ] {
+            let output = render(&bytes, &shadowed_config(mode)).unwrap();
+            assert_eq!(output.meta.width, baseline.meta.width, "阴影不应改变画布尺寸");
+            assert_eq!(output.meta.height, baseline.meta.height);
+            assert_ne!(output.bytes, baseline.bytes, "阴影模式 {mode:?} 应改变渲染结果");
+        }
     }
 
     #[test]

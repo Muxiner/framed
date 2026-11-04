@@ -67,7 +67,8 @@ cargo run -p framed-cli -- render photo.jpg -t film -o out.png
 11. **用户字体**：文本块用 `customFont`（字体 id）引用，上传走 `engine.registerFont(id, bytes)`；字体解析/注册在 core（`register_user_font`），wasm/tauri 各自暴露入口。网页端持久化在 IndexedDB（`framed/fonts`），刷新后重新注册；删除字体要清空引用块。
 12. **照片库排序是纯 UI 状态**：拖拽只调整 `library` 数组顺序，不改 `activePhotoId`、不触发渲染、不进撤销历史；「导出全部」按当前库顺序构造 items。
 13. **预设分享码**：`FRAMED1:` + base64url(紧凑 JSON `{v:1,name,frame,blocks}`)，不含 output/grid；含 Logo 或 >32KB 时引导用 JSON 导出；导入端要容错前缀/空白/标准与 URL-safe base64。
-14. **预设**：localStorage `framed.presets.v1`（`{version, presets}`，上限 30）；套用走 `editor.applyPreset`，只覆盖 frame/blocks、保留 output/grid、camera/gear/date 按当前照片 `exifTexts` 替换、并进入撤销历史。
+14. **多选 / 阴影 / 品牌样式**：多选只影响 `selectedIds`（主选中 `selectedId`），整体拖拽用 `moveBlocksTo(positions)`（一个历史步）；照片阴影在 `frame.photoShadow`，切换模板必须保留；品牌样式在 `ui/brand-styles.ts`，`applyBrandStyle` 走历史与统一同步。
+15. **预设**：localStorage `framed.presets.v1`（`{version, presets}`，上限 30）；套用走 `editor.applyPreset`，只覆盖 frame/blocks、保留 output/grid、camera/gear/date 按当前照片 `exifTexts` 替换、并进入撤销历史。
 
 ## 视觉规范（UI）
 

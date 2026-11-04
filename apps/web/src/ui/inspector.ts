@@ -113,6 +113,8 @@ export class Inspector {
   private readonly editor: Editor;
   private readonly scroll: HTMLElement;
   private readonly selectedHost: HTMLElement;
+  private multiPanel: { root: HTMLElement; countLabel: HTMLElement; names: HTMLElement } | null = null;
+  private multiKey = '';
   private readonly empty: EmptyHandles;
   private panel: SelectedPanel | null = null;
   private readonly logoInput: HTMLInputElement;
@@ -290,6 +292,11 @@ export class Inspector {
 
   private update(state: EditorState): void {
     toggleClass(this.root, 'is-open', state.inspectorOpen);
+    if (state.selectedIds.length > 1) {
+      this.renderMulti(state);
+      return;
+    }
+    this.multiPanel = null;
     const block =
       (state.config?.blocks.find((item) => item.id === state.selectedId) as Block | undefined) ?? null;
     if (!block) {
@@ -310,6 +317,61 @@ export class Inspector {
       this.selectedHost.replaceChildren(this.panel.root);
     }
     this.updatePanel(block, this.panel);
+  }
+
+  private renderMulti(state: EditorState): void {
+    const ids = state.selectedIds;
+    const key = ids.join('|');
+    this.empty.root.hidden = true;
+    this.selectedHost.hidden = false;
+    this.panel = null;
+    if (!this.multiPanel) {
+      const countLabel = h('span', { class: 'insp-name', text: '' });
+      const tag = h('span', { class: 'insp-tag mono', text: 'MULTI · SELECTION' });
+      const close = iconButton({
+        name: 'close',
+        label: '取消选择',
+        onClick: () => this.editor.select(null),
+      });
+      const head = h('div', { class: 'insp-head' }, [
+        h('div', { class: 'insp-head-texts' }, [countLabel, tag]),
+        h('div', { class: 'insp-head-actions' }, [close]),
+      ]);
+      const hint = h('p', {
+        class: 'insp-multi-hint',
+        text: '在画布上拖拽任意选中块可整体移动；方向键微调（Shift = 1/12 栅格）。',
+      });
+      const names = h('p', { class: 'insp-multi-names mono', text: '' });
+      const actions = h('div', { class: 'insp-multi-actions' }, [
+        textButton('全选文字', {
+          icon: 'text',
+          className: 'btn-block btn-ghost',
+          onClick: () => this.editor.selectAllText(),
+        }),
+        textButton('取消选择', {
+          icon: 'close',
+          className: 'btn-block btn-ghost',
+          onClick: () => this.editor.select(null),
+        }),
+      ]);
+      const root = h('div', { class: 'insp-panel insp-multi' }, [
+        head,
+        h('div', { class: 'insp-multi-body' }, [hint, names, actions]),
+      ]);
+      this.multiPanel = { root, countLabel, names };
+      this.multiKey = '';
+      this.selectedHost.replaceChildren(root);
+    }
+    if (this.multiKey !== key) {
+      this.multiKey = key;
+      const blocks = state.config?.blocks ?? [];
+      const selected = blocks.filter((block) => ids.includes(block.id));
+      setText(this.multiPanel.countLabel, `已选 ${ids.length} 个元素`);
+      setText(
+        this.multiPanel.names,
+        selected.map((block) => block.name || block.id).join(' · '),
+      );
+    }
   }
 
   private buildPanel(block: Block): SelectedPanel {

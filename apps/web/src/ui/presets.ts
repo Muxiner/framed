@@ -9,7 +9,9 @@ import type {
   GridConfig,
   LogoBlock,
   OutputConfig,
+  PhotoShadowConfig,
   RenderConfig,
+  ShadowMode,
   TextAlign,
   TextBlock,
 } from '../types';
@@ -72,6 +74,39 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+const SHADOW_MODES: readonly ShadowMode[] = ['outer', 'inner', 'both'];
+
+function defaultPhotoShadow(): PhotoShadowConfig {
+  return {
+    enabled: false,
+    mode: 'outer',
+    angle: 120,
+    distance: 0.012,
+    blur: 0.02,
+    spread: 0,
+    color: '#000000',
+    opacity: 0.28,
+  };
+}
+
+function normalizePhotoShadow(value: unknown): PhotoShadowConfig {
+  const fallback = defaultPhotoShadow();
+  if (!isRecord(value)) return fallback;
+  return {
+    enabled: value.enabled === true,
+    mode:
+      typeof value.mode === 'string' && SHADOW_MODES.includes(value.mode as ShadowMode)
+        ? (value.mode as ShadowMode)
+        : fallback.mode,
+    angle: isNumber(value.angle) ? clamp(value.angle, 0, 360) : fallback.angle,
+    distance: isNumber(value.distance) ? clamp(value.distance, 0, 0.3) : fallback.distance,
+    blur: isNumber(value.blur) ? clamp(value.blur, 0, 0.3) : fallback.blur,
+    spread: isNumber(value.spread) ? clamp(value.spread, -0.2, 0.3) : fallback.spread,
+    color: isHexColor(value.color) ? value.color.toLowerCase() : fallback.color,
+    opacity: isNumber(value.opacity) ? clamp(value.opacity, 0, 1) : fallback.opacity,
+  };
+}
+
 function normalizeFrame(value: unknown): FrameConfig | null {
   if (!isRecord(value)) return null;
   const template = value.template;
@@ -85,6 +120,7 @@ function normalizeFrame(value: unknown): FrameConfig | null {
     background: value.background.toLowerCase(),
     radius: clamp(value.radius, 0, 0.5),
     filmHoles: value.filmHoles,
+    photoShadow: normalizePhotoShadow(value.photoShadow),
   };
 }
 

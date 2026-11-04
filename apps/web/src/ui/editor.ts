@@ -26,6 +26,7 @@ import {
   type CustomFontMeta,
 } from './fonts';
 import type { Preset } from './presets';
+import type { BrandStyle } from './brand-styles';
 import { fetchSample, type SampleId } from './samples';
 import { toast } from './toast';
 
@@ -154,6 +155,8 @@ export interface EditorState {
   fontBusy: boolean;
   config: RenderConfig | null;
   selectedId: string | null;
+  /** 多选：包含主选中（selectedId）在内的全部选中块 id。 */
+  selectedIds: string[];
   bitmap: ImageBitmap | null;
   meta: RenderMeta | null;
   rendering: boolean;
@@ -191,6 +194,7 @@ function initialState(): EditorState {
     fontBusy: false,
     config: null,
     selectedId: null,
+    selectedIds: [],
     bitmap: null,
     meta: null,
     rendering: false,
@@ -253,6 +257,10 @@ function mergeConfig(fresh: RenderConfig, previous: RenderConfig | null, options
     grid: options.preserveGrid ? previous.grid : fresh.grid,
     output: options.preserveOutput ? previous.output : fresh.output,
   };
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
 }
 
 function guessMime(bytes: Uint8Array, name: string): string {
@@ -893,6 +901,7 @@ export class Editor {
         template: entry.template,
         activePhotoId: entry.id,
         selectedId: null,
+    selectedIds: [],
         meta: null,
         bitmap: null,
         status: 'ready',
@@ -1000,6 +1009,7 @@ export class Editor {
       config: null,
       activePhotoId: null,
       selectedId: null,
+    selectedIds: [],
       bitmap: null,
       meta: null,
       status: 'empty',
@@ -1081,6 +1091,40 @@ export class Editor {
     toast(`已套用预设「${preset.name}」`, 'success', 2800);
   }
 
+  // ---------------------------------------------------------------- 品牌样式
+
+  async applyBrandStyle(style: BrandStyle): Promise<void> {
+    const engine = this.engine;
+    const photo = this.state.photo;
+    const config = this.state.config;
+    if (!engine || !photo || !config) {
+      toast('请先导入照片再套用样式', 'info', 2400);
+      return;
+    }
+    try {
+      const base = await engine.defaultConfig(photo, style.template);
+      const next = style.build(base);
+      next.output = { ...config.output };
+      next.grid = { ...config.grid };
+      const ids = new Set(next.blocks.map((block) => block.id));
+      const selectedIds = this.state.selectedIds.filter((id) => ids.has(id));
+      this.beginEdit('style:apply', 'manual');
+      this.patch({
+        config: next,
+        template: next.frame.template,
+        selectedIds,
+        selectedId: selectedIds.includes(this.state.selectedId ?? '')
+          ? this.state.selectedId
+          : selectedIds[selectedIds.length - 1] ?? null,
+      });
+      this.scheduleRender();
+      this.endCoalescedEdit();
+      toast(`已应用「${style.name}」风格`, 'success', 2600);
+    } catch (error) {
+      toast(`样式应用失败：${errorMessage(error)}`, 'error', 4200);
+    }
+  }
+
   // ---------------------------------------------------------------- 模板 / 边框
 
   async setTemplate(template: FrameTemplate): Promise<void> {
@@ -1101,6 +1145,8 @@ export class Editor {
         preserveGrid: true,
         preserveOutput: true,
       });
+      // 切换模板不应丢掉用户调好的照片阴影。
+      config.frame = { ...config.frame, photoShadow: { ...previous.frame.photoShadow } };
       this.beginEdit('template', 'manual');
       this.patch({ config });
       this.scheduleRender();
@@ -1150,10 +1196,82 @@ export class Editor {
 
   // ---------------------------------------------------------------- 内容块
 
-  select(id: string | null): void {
+  select(id: string | null, options: { additive?: boolean } = {}): void {
     this.endCoalescedEdit();
-    if (this.state.selectedId === id) return;
-    this.patch({ selectedId: id });
+    if (id === null) {
+      if (this.state.selectedId === null && this.state.selectedIds.length === 0) return;
+      this.patch({ selectedId: null, selectedIds: [] });
+      return;
+    }
+    if (!this.state.config?.blocks.some((block) => block.id === id)) return;
+
+    if (options.additive) {
+      const exists = this.state.selectedIds.includes(id);
+      const next = exists
+        ? this.state.selectedIds.filter((item) => item !== id)
+        : [...this.state.selectedIds, id];
+      const primary = next.length === 0
+        ? null
+        : this.state.selectedId === id && exists
+          ? next[next.length - 1] ?? null
+          : id;
+      this.patch({ selectedIds: next, selectedId: primary });
+      return;
+    }
+    if (this.state.selectedIds.length === 1 && this.state.selectedId === id) return;
+    this.patch({ selectedIds: [id], selectedId: id });
+  }
+
+  /** 全选可见文字块（Cmd/Ctrl+A）。 */
+  selectAllText(): void {
+    const config = this.state.config;
+    if (!config) return;
+    const ids = config.blocks
+      .filter((block) => block.visible && block.type === 'text')
+      .map((block) => block.id);
+    if (ids.length === 0) {
+      toast('没有可选的文字块', 'info', 1800);
+      return;
+    }
+    this.endCoalescedEdit();
+    this.patch({ selectedIds: ids, selectedId: ids[ids.length - 1] ?? null });
+  }
+
+  /** 整体微调选中块（方向键）。 */
+  nudgeSelection(dx: number, dy: number): void {
+    const config = this.state.config;
+    if (!config) return;
+    const ids = this.currentSelection();
+    if (ids.length === 0) return;
+    const selected = new Set(ids);
+    const movable = config.blocks.some((block) => selected.has(block.id) && block.visible);
+    if (!movable) return;
+    this.beginEdit('position:nudge', 'idle', 600);
+    const blocks = config.blocks.map((block) =>
+      selected.has(block.id) && block.visible
+        ? { ...block, x: clamp01(block.x + dx), y: clamp01(block.y + dy) }
+        : block,
+    );
+    this.patch({ config: { ...config, blocks } });
+    this.scheduleRender();
+  }
+
+  /** 把多个块移动到指定位置（整体拖拽，一个历史步）。 */
+  moveBlocksTo(positions: Map<string, { x: number; y: number }>): void {
+    const config = this.state.config;
+    if (!config || positions.size === 0) return;
+    this.beginEdit('position:group', 'manual');
+    const blocks = config.blocks.map((block) => {
+      const next = positions.get(block.id);
+      return next ? { ...block, x: clamp01(next.x), y: clamp01(next.y) } : block;
+    });
+    this.patch({ config: { ...config, blocks } });
+    this.scheduleRender();
+  }
+
+  private currentSelection(): string[] {
+    if (this.state.selectedIds.length > 0) return this.state.selectedIds;
+    return this.state.selectedId ? [this.state.selectedId] : [];
   }
 
   /** 窄屏下从左侧列表进入检查器（舞台拖拽时不弹抽屉，避免遮住画布）。 */

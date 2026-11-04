@@ -13,8 +13,9 @@ interface DragState {
   startClientY: number;
   anchorX: number;
   anchorY: number;
+  /** 拖拽开始时所有选中块的位置（保住相对关系）。 */
+  startPositions: Map<string, { x: number; y: number }>;
   moved: boolean;
-  historyStarted: boolean;
 }
 
 function roundRectPath(
@@ -55,6 +56,7 @@ export class Stage {
   private readonly zoomLabel: HTMLButtonElement;
   private readonly gridButton: HTMLButtonElement;
   private readonly snapButton: HTMLButtonElement;
+  private readonly selectAllButton: HTMLButtonElement;
   private readonly previewCtx: CanvasRenderingContext2D;
 
   private drag: DragState | null = null;
@@ -63,6 +65,7 @@ export class Stage {
   private lastBitmap: EditorState['bitmap'] = null;
   private lastConfig: EditorState['config'] = null;
   private lastSelected: string | null = null;
+  private lastSelectedIds = '';
   private lastZoom: 'fit' | number = 'fit';
 
   constructor(editor: Editor) {
@@ -145,6 +148,12 @@ export class Stage {
       title: '吸附 1/12 栅格 (S)',
       onClick: () => this.editor.toggleSnap(),
     });
+    this.selectAllButton = iconButton({
+      name: 'text',
+      label: '全选文字块',
+      title: '全选文字块 (⌘/Ctrl+A)',
+      onClick: () => this.editor.selectAllText(),
+    });
     this.toolbar = h('div', { class: 'stage-toolbar', role: 'toolbar', ariaLabel: '画布工具' }, [
       this.fitButton,
       h('span', { class: 'tool-divider' }),
@@ -152,6 +161,7 @@ export class Stage {
       this.zoomLabel,
       zoomIn,
       h('span', { class: 'tool-divider' }),
+      this.selectAllButton,
       this.gridButton,
       this.snapButton,
     ]);
@@ -267,7 +277,9 @@ export class Stage {
     const metaChanged = meta !== this.lastMeta;
     const bitmapChanged = bitmap !== this.lastBitmap;
     const configChanged = state.config !== this.lastConfig;
-    const selectionChanged = state.selectedId !== this.lastSelected;
+    const selectedIdsKey = state.selectedIds.join('|');
+    const selectionChanged =
+      state.selectedId !== this.lastSelected || selectedIdsKey !== this.lastSelectedIds;
     const zoomChanged = state.zoom !== this.lastZoom;
 
     if (metaChanged || bitmapChanged || zoomChanged) {
@@ -279,6 +291,7 @@ export class Stage {
     this.lastMeta = meta;
     this.lastConfig = state.config;
     this.lastSelected = state.selectedId;
+    this.lastSelectedIds = selectedIdsKey;
     this.lastZoom = state.zoom;
 
     // 空状态 / 载入中
@@ -449,12 +462,14 @@ export class Stage {
     const rectById = new Map<string, BlockRect>();
     for (const rect of meta.blocks) rectById.set(rect.id, rect);
 
+    const selectedSet = new Set(state.selectedIds);
     for (const block of config.blocks) {
       if (!block.visible) continue;
       const source = rectById.get(block.id);
       if (!source) continue;
       const rect = this.blockRect(block, source, meta.width, meta.height);
-      const isSelected = block.id === state.selectedId;
+      const isSelected = selectedSet.has(block.id);
+      const isPrimary = block.id === state.selectedId;
       const isHover = block.id === this.hoverId && !isSelected && !this.drag;
       if (!isSelected && !isHover) continue;
       const x = rect.x * scale;
@@ -464,7 +479,7 @@ export class Stage {
 
       ctx.save();
       if (isSelected) {
-        if (this.drag?.id === block.id && config.grid.snap) {
+        if (isPrimary && this.drag?.id === block.id && config.grid.snap) {
           ctx.strokeStyle = 'rgba(229, 181, 103, 0.4)';
           ctx.lineWidth = 1;
           ctx.beginPath();
@@ -474,11 +489,15 @@ export class Stage {
           ctx.lineTo(cssW, Math.round(block.y * cssH) + 0.5);
           ctx.stroke();
         }
-        ctx.strokeStyle = 'rgba(229, 181, 103, 0.92)';
-        ctx.lineWidth = 1.25;
+        ctx.strokeStyle = isPrimary ? 'rgba(229, 181, 103, 0.92)' : 'rgba(229, 181, 103, 0.42)';
+        ctx.lineWidth = isPrimary ? 1.25 : 1;
         ctx.setLineDash([4, 3]);
         ctx.strokeRect(x + 0.5, y + 0.5, w, hgt);
         ctx.setLineDash([]);
+        if (!isPrimary) {
+          ctx.restore();
+          continue;
+        }
         // 四角括线
         const arm = Math.min(7, w / 3, hgt / 3);
         ctx.strokeStyle = 'rgba(240, 201, 135, 0.98)';
@@ -602,18 +621,33 @@ export class Stage {
         this.editor.select(null);
         return;
       }
-      const block = state.config.blocks.find((item) => item.id === hit);
-      if (!block) return;
-      this.editor.select(hit);
+      const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+      if (additive) {
+        this.editor.select(hit, { additive: true });
+        if (!this.editor.state.selectedIds.includes(hit)) return;
+      } else if (!this.editor.state.selectedIds.includes(hit)) {
+        this.editor.select(hit);
+      }
+      const current = this.editor.state;
+      if (!current.config) return;
+      const primary = current.config.blocks.find((item) => item.id === hit);
+      if (!primary) return;
+      const selected = new Set(current.selectedIds);
+      const startPositions = new Map<string, { x: number; y: number }>();
+      for (const item of current.config.blocks) {
+        if (item.visible && selected.has(item.id)) {
+          startPositions.set(item.id, { x: item.x, y: item.y });
+        }
+      }
       this.drag = {
         pointerId: event.pointerId,
         id: hit,
         startClientX: event.clientX,
         startClientY: event.clientY,
-        anchorX: block.x,
-        anchorY: block.y,
+        anchorX: primary.x,
+        anchorY: primary.y,
+        startPositions,
         moved: false,
-        historyStarted: false,
       };
       overlay.setPointerCapture(event.pointerId);
       overlay.classList.add('is-dragging');
@@ -631,17 +665,21 @@ export class Stage {
         if (!this.drag.moved) {
           if (Math.abs(dx) <= 0.001 && Math.abs(dy) <= 0.001) return;
           this.drag.moved = true;
-          this.drag.historyStarted = true;
-          this.editor.beginBlockDrag(this.drag.id);
         }
-        let x = this.drag.anchorX + dx;
-        let y = this.drag.anchorY + dy;
+        let deltaX = dx;
+        let deltaY = dy;
         const grid = state.config?.grid;
         if (grid?.snap && !event.altKey) {
-          x = Math.round(x * 12) / 12;
-          y = Math.round(y * 12) / 12;
+          const snappedX = Math.round((this.drag.anchorX + dx) * 12) / 12;
+          const snappedY = Math.round((this.drag.anchorY + dy) * 12) / 12;
+          deltaX = snappedX - this.drag.anchorX;
+          deltaY = snappedY - this.drag.anchorY;
         }
-        this.editor.setBlockPosition(this.drag.id, x, y);
+        const positions = new Map<string, { x: number; y: number }>();
+        for (const [id, start] of this.drag.startPositions) {
+          positions.set(id, { x: Math.min(1, Math.max(0, start.x + deltaX)), y: Math.min(1, Math.max(0, start.y + deltaY)) });
+        }
+        this.editor.moveBlocksTo(positions);
         return;
       }
       const point = this.imagePoint(event);
@@ -656,9 +694,9 @@ export class Stage {
 
     const endDrag = (event: PointerEvent): void => {
       if (!this.drag || event.pointerId !== this.drag.pointerId) return;
-      const historyStarted = this.drag.historyStarted;
+      const moved = this.drag.moved;
       this.drag = null;
-      if (historyStarted) this.editor.endBlockDrag();
+      if (moved) this.editor.endCoalescedEdit();
       overlay.classList.remove('is-dragging');
       overlay.style.cursor = 'default';
       this.drawOverlay();

@@ -18,7 +18,7 @@ pub mod text;
 
 pub use config::{
     Block, BlockKind, FontFamily, FrameConfig, FrameTemplate, GridConfig, LogoBlock, OutputConfig,
-    OutputFormat, RenderConfig, TextAlign, TextBlock,
+    OutputFormat, PhotoShadowConfig, RenderConfig, ShadowMode, TextAlign, TextBlock,
 };
 pub use exif::{probe, ExifInfo, PhotoInfo};
 pub use fonts::{register_user_font, remove_user_font, user_font_ids};

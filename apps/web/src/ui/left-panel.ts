@@ -5,6 +5,8 @@ import {
   type Block,
   type FontFamily,
   type FrameTemplate,
+  type PhotoShadowConfig,
+  type ShadowMode,
 } from '../types';
 import { h, percent, setText, setValue, toggleClass } from './dom';
 import {
@@ -32,6 +34,7 @@ import {
 } from './fields';
 import { formatFontDate, formatFontSize, type CustomFontMeta } from './fonts';
 import { icon } from './icons';
+import { BRAND_STYLES } from './brand-styles';
 import { LibraryReorder } from './library-reorder';
 import { PresetDialog } from './preset-dialog';
 import { SAMPLES, sampleThumb, sampleUrl, type SampleId } from './samples';
@@ -114,6 +117,17 @@ export class LeftPanel {
   private radiusField!: SliderHandle;
   private holesField!: ToggleHandle;
   private holesRow!: HTMLElement;
+  private shadowBlock!: HTMLElement;
+  private shadowToggle!: ToggleHandle;
+  private shadowModeField!: SegmentedHandle<ShadowMode>;
+  private shadowAngleField!: SliderHandle;
+  private shadowDistanceField!: SliderHandle;
+  private shadowBlurField!: SliderHandle;
+  private shadowSpreadField!: SliderHandle;
+  private shadowOpacityField!: SliderHandle;
+  private shadowColorField!: ColorHandle;
+  private shadowParams!: HTMLElement;
+  private brandCards: HTMLButtonElement[] = [];
   private applyAllButton!: HTMLButtonElement;
 
   private blocksSection!: SectionHandle;
@@ -515,6 +529,111 @@ export class LeftPanel {
     this.holesRow = this.holesField.root;
     this.holesRow.hidden = true;
 
+    const brandStrip = h('div', { class: 'brand-style-strip', role: 'group', ariaLabel: '品牌样式' });
+    for (const style of BRAND_STYLES) {
+      const card = h(
+        'button',
+        {
+          class: 'brand-card',
+          title: `${style.name} · ${style.tagline}`,
+          ariaLabel: `应用${style.name}风格`,
+          attrs: { type: 'button' },
+        },
+        [
+          h('span', { class: 'brand-swatch', ariaHidden: true }),
+          h('span', { class: 'brand-name', text: style.name }),
+          h('span', { class: 'brand-tag', text: style.tagline }),
+        ],
+      );
+      card.style.setProperty('--brand', style.accent);
+      card.addEventListener('click', () => void this.editor.applyBrandStyle(style));
+      this.brandCards.push(card);
+      brandStrip.append(card);
+    }
+
+    this.shadowToggle = toggleField({
+      label: '照片阴影',
+      checked: false,
+      hint: '外阴影 / 内阴影，方向、距离、模糊可调',
+      onChange: (checked) => this.setShadow({ enabled: checked }),
+    });
+    this.shadowModeField = segmentedField<ShadowMode>({
+      label: '阴影类型',
+      options: [
+        { value: 'outer', label: '外' },
+        { value: 'inner', label: '内' },
+        { value: 'both', label: '内外' },
+      ],
+      value: 'outer',
+      ariaLabel: '照片阴影类型',
+      onChange: (mode) => this.setShadow({ mode }),
+    });
+    this.shadowAngleField = sliderField({
+      label: '阴影方向',
+      min: 0,
+      max: 360,
+      step: 1,
+      value: 120,
+      format: (value) => `${Math.round(value)}°`,
+      ariaLabel: '照片阴影方向',
+      onInput: (value) => this.setShadow({ angle: value }),
+    });
+    this.shadowDistanceField = sliderField({
+      label: '阴影距离',
+      min: 0,
+      max: 0.2,
+      step: 0.001,
+      value: 0.012,
+      format: (value) => percent(value, 1),
+      ariaLabel: '照片阴影距离',
+      onInput: (value) => this.setShadow({ distance: value }),
+    });
+    this.shadowBlurField = sliderField({
+      label: '阴影模糊',
+      min: 0,
+      max: 0.2,
+      step: 0.001,
+      value: 0.02,
+      format: (value) => percent(value, 1),
+      ariaLabel: '照片阴影模糊',
+      onInput: (value) => this.setShadow({ blur: value }),
+    });
+    this.shadowSpreadField = sliderField({
+      label: '阴影扩散',
+      min: -0.1,
+      max: 0.2,
+      step: 0.001,
+      value: 0,
+      format: (value) => percent(value, 1),
+      ariaLabel: '照片阴影扩散',
+      onInput: (value) => this.setShadow({ spread: value }),
+    });
+    this.shadowOpacityField = sliderField({
+      label: '阴影不透明度',
+      min: 0,
+      max: 1,
+      step: 0.01,
+      value: 0.28,
+      format: (value) => `${Math.round(value * 100)}%`,
+      ariaLabel: '照片阴影不透明度',
+      onInput: (value) => this.setShadow({ opacity: value }),
+    });
+    this.shadowColorField = colorField({
+      label: '阴影颜色',
+      value: '#000000',
+      onChange: (value) => this.setShadow({ color: value }),
+    });
+    this.shadowParams = h('div', { class: 'shadow-params', hidden: true }, [
+      this.shadowModeField.root,
+      this.shadowAngleField.root,
+      this.shadowDistanceField.root,
+      this.shadowBlurField.root,
+      this.shadowSpreadField.root,
+      this.shadowOpacityField.root,
+      this.shadowColorField.root,
+    ]);
+    this.shadowBlock = h('div', { class: 'shadow-block' }, [this.shadowToggle.root, this.shadowParams]);
+
     const presetButton = h('button', {
       class: 'sec-action-btn',
       html: `${icon('sparkle', 12)}<span>预设</span>`,
@@ -531,15 +650,24 @@ export class LeftPanel {
       open: true,
       actions: [presetButton],
       body: h('div', {}, [
+        h('p', { class: 'sec-mini-label mono', text: '品牌样式' }),
+        brandStrip,
         cards,
         this.marginField.root,
         this.bottomField.root,
         this.backgroundField.root,
         this.radiusField.root,
         this.holesRow,
+        this.shadowBlock,
       ]),
     });
     return this.frameSection;
+  }
+
+  private setShadow(patch: Partial<PhotoShadowConfig>): void {
+    const frame = this.editor.state.config?.frame;
+    if (!frame) return;
+    this.editor.setFrame({ photoShadow: { ...frame.photoShadow, ...patch } });
   }
 
   // ------------------------------------------------------------------ 内容块
@@ -578,8 +706,10 @@ export class LeftPanel {
       iconWrap,
       h('span', { class: 'block-texts' }, [name, preview]),
     ]);
-    main.addEventListener('click', () => {
-      this.editor.select(block.id);
+    main.addEventListener('click', (event) => {
+      this.editor.select(block.id, {
+        additive: event.shiftKey || event.metaKey || event.ctrlKey,
+      });
       this.editor.openInspectorForSelection();
     });
 
@@ -655,11 +785,14 @@ export class LeftPanel {
     this.addLogoRow.hidden = hasLogo || !state.config;
     this.blocksSection.setBadge(blocks.length ? String(blocks.length) : null);
 
+    const selectedIds = new Set(state.selectedIds);
     for (const block of blocks) {
       const row = this.blockRows.get(block.id);
       if (!row) continue;
-      const selected = state.selectedId === block.id;
-      toggleClass(row.root, 'is-selected', selected);
+      const selected = selectedIds.has(block.id);
+      const primary = state.selectedId === block.id;
+      toggleClass(row.root, 'is-selected', primary);
+      toggleClass(row.root, 'is-selected-multi', selected && !primary);
       toggleClass(row.root, 'is-hidden', !block.visible);
       row.main.setAttribute('aria-pressed', String(selected));
       setText(row.name, block.name);
@@ -674,7 +807,7 @@ export class LeftPanel {
       row.eye.innerHTML = icon(block.visible ? 'eye' : 'eyeOff', 14);
       row.eye.setAttribute('aria-label', `${block.visible ? '隐藏' : '显示'} ${block.name}`);
       row.eye.setAttribute('aria-pressed', String(block.visible));
-      const showEdit = selected && state.config !== null;
+      const showEdit = primary && state.config !== null;
       if (row.edit.hidden === showEdit) row.edit.hidden = !showEdit;
     }
   }
@@ -960,7 +1093,18 @@ export class LeftPanel {
       this.backgroundField.setValue(frame.background);
       this.radiusField.setValue(frame.radius);
       this.holesField.setValue(frame.filmHoles);
+      const photoShadow = frame.photoShadow;
+      this.shadowToggle.setValue(photoShadow.enabled);
+      this.shadowModeField.setValue(photoShadow.mode);
+      this.shadowAngleField.setValue(photoShadow.angle);
+      this.shadowDistanceField.setValue(photoShadow.distance);
+      this.shadowBlurField.setValue(photoShadow.blur);
+      this.shadowSpreadField.setValue(photoShadow.spread);
+      this.shadowOpacityField.setValue(photoShadow.opacity);
+      this.shadowColorField.setValue(photoShadow.color);
+      this.shadowParams.hidden = !photoShadow.enabled;
     }
+    for (const card of this.brandCards) card.disabled = !hasFrame;
 
     // 内容块
     this.syncBlocks(state);

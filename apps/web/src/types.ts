@@ -7,6 +7,23 @@ export type TextAlign = 'left' | 'center' | 'right';
 export type AnchorY = 'top' | 'middle' | 'bottom';
 export type OutputFormat = 'png' | 'jpeg';
 
+export type ShadowMode = 'outer' | 'inner' | 'both';
+
+export interface PhotoShadowConfig {
+  enabled: boolean;
+  mode: ShadowMode;
+  /** 方向：0° = 向右，90° = 向下。 */
+  angle: number;
+  /** 偏移距离 / 照片短边。 */
+  distance: number;
+  /** 模糊半径 / 照片短边。 */
+  blur: number;
+  /** 扩散 / 照片短边（可为负）。 */
+  spread: number;
+  color: string;
+  opacity: number;
+}
+
 export interface FrameConfig {
   template: FrameTemplate;
   margin: number;
@@ -14,6 +31,7 @@ export interface FrameConfig {
   background: string;
   radius: number;
   filmHoles: boolean;
+  photoShadow: PhotoShadowConfig;
 }
 
 export interface BlockBase {

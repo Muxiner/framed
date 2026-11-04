@@ -12,11 +12,21 @@ import type {
   FrameTemplate,
   LogoBlock,
   PhotoInfo,
+  PhotoShadowConfig,
   RenderConfig,
   RenderMeta,
   RenderResult,
   TextBlock,
 } from './types';
+
+function hexToRgba(hex: string, alpha: number): string {
+  const value = hex.replace('#', '');
+  const r = parseInt(value.slice(0, 2), 16);
+  const g = parseInt(value.slice(2, 4), 16);
+  const b = parseInt(value.slice(4, 6), 16);
+  const a = Math.max(0, Math.min(1, alpha));
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
 
 const EMPTY_EXIF: ExifInfo = {
   camera: 'SONY α7 IV',
@@ -33,14 +43,27 @@ const EMPTY_EXIF: ExifInfo = {
   copyright: '',
 };
 
+function defaultPhotoShadow(): PhotoShadowConfig {
+  return {
+    enabled: false,
+    mode: 'outer',
+    angle: 120,
+    distance: 0.012,
+    blur: 0.02,
+    spread: 0,
+    color: '#000000',
+    opacity: 0.28,
+  };
+}
+
 function templateFrame(template: FrameTemplate, photoW: number, photoH: number): FrameConfig {
   const short = Math.min(photoW, photoH);
   const presets: Record<FrameTemplate, FrameConfig> = {
-    white: { template, margin: 0.045, bottomRatio: 3.0, background: '#f6f3ee', radius: 0, filmHoles: true },
-    polaroid: { template, margin: 0.05, bottomRatio: 4.2, background: '#f7f4ee', radius: 0, filmHoles: true },
-    film: { template, margin: 0.04, bottomRatio: 1.9, background: '#0b0b0b', radius: 0, filmHoles: true },
-    black: { template, margin: 0.035, bottomRatio: 1, background: '#0a0a0a', radius: 0, filmHoles: false },
-    none: { template, margin: 0, bottomRatio: 1, background: '#000000', radius: 0, filmHoles: false },
+    white: { template, margin: 0.045, bottomRatio: 3.0, background: '#f6f3ee', radius: 0, filmHoles: true, photoShadow: defaultPhotoShadow() },
+    polaroid: { template, margin: 0.05, bottomRatio: 4.2, background: '#f7f4ee', radius: 0, filmHoles: true, photoShadow: defaultPhotoShadow() },
+    film: { template, margin: 0.04, bottomRatio: 1.9, background: '#0b0b0b', radius: 0, filmHoles: true, photoShadow: defaultPhotoShadow() },
+    black: { template, margin: 0.035, bottomRatio: 1, background: '#0a0a0a', radius: 0, filmHoles: false, photoShadow: defaultPhotoShadow() },
+    none: { template, margin: 0, bottomRatio: 1, background: '#000000', radius: 0, filmHoles: false, photoShadow: defaultPhotoShadow() },
   };
   void short;
   return presets[template];
@@ -371,12 +394,41 @@ class MockEngine implements Engine {
       w: photoW * scale,
       h: photoH * scale,
     };
+    const shadow = config.frame.photoShadow;
+    const short = Math.min(photoBox.w, photoBox.h);
+    const shadowAngle = (shadow.angle * Math.PI) / 180;
+    const shadowX = Math.cos(shadowAngle) * shadow.distance * short;
+    const shadowY = Math.sin(shadowAngle) * shadow.distance * short;
+    if (shadow.enabled && shadow.mode !== 'inner') {
+      ctx.save();
+      ctx.shadowColor = hexToRgba(shadow.color, shadow.opacity);
+      ctx.shadowBlur = shadow.blur * short * 1.6;
+      ctx.shadowOffsetX = shadowX;
+      ctx.shadowOffsetY = shadowY;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.001)';
+      ctx.fillRect(photoBox.x, photoBox.y, photoBox.w, photoBox.h);
+      ctx.restore();
+    }
     ctx.save();
     if (radius > 0) {
       roundRectPath(ctx, photoBox.x, photoBox.y, photoBox.w, photoBox.h, radius);
       ctx.clip();
     }
     ctx.drawImage(image, photoBox.x, photoBox.y, photoBox.w, photoBox.h);
+    if (shadow.enabled && shadow.mode !== 'outer') {
+      const gradient = ctx.createRadialGradient(
+        photoBox.x + photoBox.w / 2 + shadowX,
+        photoBox.y + photoBox.h / 2 + shadowY,
+        short * 0.22,
+        photoBox.x + photoBox.w / 2,
+        photoBox.y + photoBox.h / 2,
+        short * 0.82,
+      );
+      gradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
+      gradient.addColorStop(1, hexToRgba(shadow.color, shadow.opacity));
+      ctx.fillStyle = gradient;
+      ctx.fillRect(photoBox.x, photoBox.y, photoBox.w, photoBox.h);
+    }
     ctx.restore();
 
     const logoImages = new Map<string, HTMLImageElement>();
