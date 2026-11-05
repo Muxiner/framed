@@ -1,7 +1,7 @@
 
 [package]
 name = "framed-desktop"
-version = "0.1.0"
+version = "0.3.0"
 description = "框影 Framed 桌面应用（Tauri v2）"
 edition = "2021"
 rust-version = "1.77.2"

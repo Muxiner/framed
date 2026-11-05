@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "framed-cli"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "framed-core",
  "image",
@@ -118,7 +118,7 @@ dependencies = [
 
 [[package]]
 name = "framed-core"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "ab_glyph",
  "base64",
@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "framed-wasm"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "framed-core",
  "serde_json",

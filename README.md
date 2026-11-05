@@ -5,6 +5,15 @@
 
 ![框影 Framed 白边模板](docs/screenshots/template-white.jpg)
 
+## 下载
+
+预编译版本在 [Releases](../../releases/latest)：
+
+- **macOS**：`Framed_*_universal.dmg`（Apple Silicon / Intel 通用）。当前构建未做 Apple Developer 签名，首次打开请右键 →「打开」，或执行 `xattr -dr com.apple.quarantine /Applications/Framed.app`
+- **Windows**：`Framed_*_x64-setup.exe`（NSIS 安装包）。未签名时 SmartScreen 会提示，点「更多信息」→「仍要运行」
+
+也可以从源码构建，见下方「快速开始」。
+
 ## 它是什么
 
 旅行回来，照片好看，但总觉得少了点「作品感」。框影把相机取景框的那套仪式感搬过来：
@@ -223,7 +232,7 @@ PYTHONPATH=<fonttools> python3 scripts/build_fonts.py
 python3 scripts/make_samples.py     # 需要 Pillow + numpy
 ```
 
-> 中国大陆网络下，仓库内 `.cargo/config.toml` 已配置 rsproxy 镜像；npm 建议 `--registry=https://registry.npmmirror.com`。
+> 中国大陆网络下可自行在本地 `.cargo/config.toml` 配置 crates 镜像（不要提交）；npm 建议 `--registry=https://registry.npmmirror.com`。
 
 ## 字体许可
 
@@ -256,6 +265,56 @@ python3 scripts/make_samples.py     # 需要 Pillow + numpy
 - [ ] 预设云端同步
 - [ ] 移动端（iOS / Android）
 
+## 自动发布 GitHub Release
+
+仓库自带 [`.github/workflows/release.yml`](.github/workflows/release.yml)：推送 `v*` tag 后自动在 GitHub Actions 上构建并发布 Release（无需本机 Windows/Mac 环境）。
+
+流程：
+
+1. macOS 任务：构建 universal `.dmg`（Apple Silicon + Intel）
+2. Windows 任务：构建 NSIS `.exe` 安装包
+3. 汇总两个产物，自动生成 Release Notes 并上传到对应 tag
+
+### 从零发布
+
+```bash
+# 1. 在 GitHub 创建公开仓库（需要本机安装 gh 并登录）
+brew install gh
+gh auth login
+gh repo create framed --public --source=. --remote=origin --push
+
+# 2. 推送版本 tag，触发 Release workflow
+git push origin v0.3.0
+```
+
+也可以在 GitHub 网页上手动创建仓库后：
+
+```bash
+git remote add origin git@github.com:<你的用户名>/framed.git
+git push -u origin main
+git push origin v0.3.0
+```
+
+版本号会自动从 tag 写入 `Cargo.toml`、`package.json` 与 `tauri.conf.json`（`scripts/set-version.mjs`）；本地想改版本可执行：
+
+```bash
+node scripts/set-version.mjs 0.3.1
+```
+
+> 注意：只推送你希望发布的 tag；旧 tag 没有 release workflow 时不会自动构建。
+
+### 可选：代码签名
+
+默认产物未签名。若要消除 macOS Gatekeeper / Windows SmartScreen 提示，可在仓库 Secrets 中配置：
+
+- macOS：`APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`（Tauri 会自动签名/公证）
+- Windows：Authenticode 证书 + `tauri.conf.json` 的 Windows signing 配置
+
+未配置签名不影响下载和运行，只是首次打开需要手动允许。
+
 ## License
 
+MIT，见 [LICENSE](LICENSE)。
+
+内嵌字体为 SIL Open Font License 1.1，详见上方「字体许可」。
 MIT © 2026 muxiner

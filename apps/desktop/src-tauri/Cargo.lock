@@ -863,7 +863,7 @@ dependencies = [
 
 [[package]]
 name = "framed-core"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "ab_glyph",
  "base64 0.22.1",
@@ -876,7 +876,7 @@ dependencies = [
 
 [[package]]
 name = "framed-desktop"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "framed-core",
